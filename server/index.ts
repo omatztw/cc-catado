@@ -27,6 +27,9 @@ import {
   saveRoomInfo,
   getRoomInfo,
   deleteRoomInfo,
+  getPublicRooms,
+  verifyRoomPassword,
+  hasRoomPassword,
   setSocketPlayerMapping,
   getPlayerIdBySocket,
   getRoomIdBySocket,
@@ -141,25 +144,147 @@ async function setupRedisAdapter(): Promise<void> {
 // ============================================
 
 /**
+ * ルーム作成ハンドラー
+ */
+async function handleCreateRoom(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: {
+    playerName: string;
+    roomName: string;
+    isPublic: boolean;
+    password?: string;
+  }
+): Promise<void> {
+  const { playerName, roomName, isPublic, password } = data;
+
+  try {
+    // ルームIDとプレイヤーIDを生成
+    const roomId = `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const playerId = uuidv4();
+
+    // 新しいゲーム状態を作成
+    let gameState = createInitialGameState(roomId);
+
+    // プレイヤーを追加
+    gameState = addPlayerToGame(gameState, playerId, playerName);
+
+    // Socket.ioルームに参加
+    await socket.join(roomId);
+
+    // Redis にマッピングを保存
+    await setSocketPlayerMapping(socket.id, playerId, roomId);
+
+    // ゲーム状態を保存
+    await saveGameState(roomId, gameState);
+
+    // ルーム情報を作成・保存
+    const roomInfo: RoomInfo = {
+      id: roomId,
+      name: roomName,
+      playerCount: gameState.players.length,
+      maxPlayers: 4,
+      status: "waiting",
+      isPublic,
+      hasPassword: !!password,
+      hostName: playerName,
+      createdAt: gameState.createdAt,
+    };
+    await saveRoomInfo(roomId, roomInfo, password);
+
+    // 作成者に通知
+    socket.emit("room_created", {
+      success: true,
+      roomId,
+      playerId,
+      gameState,
+    });
+
+    console.log(
+      `[Server] Room ${roomId} created by ${playerName} (public: ${isPublic}, password: ${!!password})`
+    );
+  } catch (error) {
+    console.error("[Server] Error in handleCreateRoom:", error);
+    socket.emit("room_created", {
+      success: false,
+      roomId: "",
+      playerId: "",
+      gameState: null,
+      error: "Failed to create room",
+    });
+  }
+}
+
+/**
+ * 公開ルーム一覧取得ハンドラー
+ */
+async function handleGetPublicRooms(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>
+): Promise<void> {
+  try {
+    const rooms = await getPublicRooms();
+    socket.emit("public_rooms", { rooms });
+    console.log(`[Server] Sent ${rooms.length} public rooms to ${socket.id}`);
+  } catch (error) {
+    console.error("[Server] Error in handleGetPublicRooms:", error);
+    socket.emit("public_rooms", { rooms: [] });
+  }
+}
+
+/**
  * ルーム参加ハンドラー
  */
 async function handleJoinRoom(
   socket: Socket<ClientToServerEvents, ServerToClientEvents>,
-  data: { roomId: string; playerName: string }
+  data: { roomId: string; playerName: string; password?: string }
 ): Promise<void> {
-  const { roomId, playerName } = data;
+  const { roomId, playerName, password } = data;
 
   try {
-    // プレイヤーIDを生成（または再接続の場合は既存のIDを使用）
+    // 既存のルーム情報を取得
+    const existingRoomInfo = await getRoomInfo(roomId);
+
+    // ルームが存在しない場合はエラー
+    if (!existingRoomInfo) {
+      socket.emit("room_joined", {
+        success: false,
+        roomId,
+        playerId: "",
+        gameState: null,
+        error: "ルームが見つかりません",
+      });
+      return;
+    }
+
+    // パスワードチェック
+    if (existingRoomInfo.hasPassword) {
+      const isValidPassword = await verifyRoomPassword(roomId, password || "");
+      if (!isValidPassword) {
+        socket.emit("room_joined", {
+          success: false,
+          roomId,
+          playerId: "",
+          gameState: null,
+          error: "パスワードが正しくありません",
+        });
+        return;
+      }
+    }
+
+    // プレイヤーIDを生成
     const playerId = uuidv4();
 
-    // 既存のゲーム状態を取得または新規作成
+    // 既存のゲーム状態を取得
     let gameState = await getGameState(roomId);
 
     if (!gameState) {
-      // 新しいルームを作成
-      gameState = createInitialGameState(roomId);
-      console.log(`[Server] Created new room: ${roomId}`);
+      socket.emit("room_joined", {
+        success: false,
+        roomId,
+        playerId: "",
+        gameState: null,
+        error: "ゲーム状態が見つかりません",
+      });
+      return;
     }
 
     // プレイヤーを追加
@@ -189,11 +314,9 @@ async function handleJoinRoom(
 
     // ルーム情報を更新
     const roomInfo: RoomInfo = {
-      id: roomId,
+      ...existingRoomInfo,
       playerCount: gameState.players.length,
-      maxPlayers: 4,
       status: gameState.phase === "waiting" ? "waiting" : "playing",
-      createdAt: gameState.createdAt,
     };
     await saveRoomInfo(roomId, roomInfo);
 
@@ -445,8 +568,10 @@ io.on("connection", (socket) => {
   console.log(`[Server] Client connected: ${socket.id}`);
 
   // イベントリスナーを登録
+  socket.on("create_room", (data) => handleCreateRoom(socket, data));
   socket.on("join_room", (data) => handleJoinRoom(socket, data));
   socket.on("leave_room", (data) => handleLeaveRoom(socket, data));
+  socket.on("get_public_rooms", () => handleGetPublicRooms(socket));
   socket.on("game_action", (action) => handleGameAction(socket, action));
   socket.on("chat_message", (data) => handleChatMessage(socket, data));
   socket.on("disconnect", () => handleDisconnect(socket));

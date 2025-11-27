@@ -151,8 +151,14 @@ export const RedisKeys = {
   /** ルーム情報のキー */
   roomInfo: (roomId: string) => `${REDIS_PREFIX}room:${roomId}:info`,
 
+  /** ルームパスワードのキー */
+  roomPassword: (roomId: string) => `${REDIS_PREFIX}room:${roomId}:password`,
+
   /** アクティブルーム一覧のキー */
   activeRooms: () => `${REDIS_PREFIX}rooms:active`,
+
+  /** 公開ルーム一覧のキー */
+  publicRooms: () => `${REDIS_PREFIX}rooms:public`,
 
   /** プレイヤーのソケットマッピング */
   playerSocket: (playerId: string) =>
@@ -241,7 +247,8 @@ export async function deleteGameState(roomId: string): Promise<void> {
  */
 export async function saveRoomInfo(
   roomId: string,
-  roomInfo: RoomInfo
+  roomInfo: RoomInfo,
+  password?: string
 ): Promise<void> {
   const client = getDataClient();
   const key = RedisKeys.roomInfo(roomId);
@@ -251,6 +258,16 @@ export async function saveRoomInfo(
 
   // アクティブルーム一覧に追加
   await client.sadd(RedisKeys.activeRooms(), roomId);
+
+  // 公開ルームの場合は公開ルーム一覧にも追加
+  if (roomInfo.isPublic) {
+    await client.sadd(RedisKeys.publicRooms(), roomId);
+  }
+
+  // パスワードを保存（ハッシュ化は省略、本番では bcrypt などを使用）
+  if (password) {
+    await client.set(RedisKeys.roomPassword(roomId), password, "EX", 86400);
+  }
 }
 
 /**
@@ -283,7 +300,9 @@ export async function deleteRoomInfo(roomId: string): Promise<void> {
   const client = getDataClient();
 
   await client.del(RedisKeys.roomInfo(roomId));
+  await client.del(RedisKeys.roomPassword(roomId));
   await client.srem(RedisKeys.activeRooms(), roomId);
+  await client.srem(RedisKeys.publicRooms(), roomId);
 
   console.log(`[Redis] Room info deleted for room: ${roomId}`);
 }
@@ -294,6 +313,63 @@ export async function deleteRoomInfo(roomId: string): Promise<void> {
 export async function getActiveRooms(): Promise<string[]> {
   const client = getDataClient();
   return await client.smembers(RedisKeys.activeRooms());
+}
+
+/**
+ * 公開ルーム一覧を取得
+ */
+export async function getPublicRooms(): Promise<RoomInfo[]> {
+  const client = getDataClient();
+  const roomIds = await client.smembers(RedisKeys.publicRooms());
+
+  if (roomIds.length === 0) {
+    return [];
+  }
+
+  const rooms: RoomInfo[] = [];
+
+  for (const roomId of roomIds) {
+    const roomInfo = await getRoomInfo(roomId);
+    if (roomInfo && roomInfo.status !== "finished") {
+      rooms.push(roomInfo);
+    } else if (!roomInfo) {
+      // 存在しないルームは一覧から削除
+      await client.srem(RedisKeys.publicRooms(), roomId);
+    }
+  }
+
+  // 作成日時の新しい順にソート
+  return rooms.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
+/**
+ * ルームパスワードを検証
+ */
+export async function verifyRoomPassword(
+  roomId: string,
+  password: string
+): Promise<boolean> {
+  const client = getDataClient();
+  const storedPassword = await client.get(RedisKeys.roomPassword(roomId));
+
+  // パスワードが設定されていない場合は true
+  if (!storedPassword) {
+    return true;
+  }
+
+  // パスワードを比較（本番では bcrypt.compare などを使用）
+  return storedPassword === password;
+}
+
+/**
+ * ルームにパスワードが設定されているか確認
+ */
+export async function hasRoomPassword(roomId: string): Promise<boolean> {
+  const client = getDataClient();
+  const password = await client.get(RedisKeys.roomPassword(roomId));
+  return !!password;
 }
 
 // ============================================

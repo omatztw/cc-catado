@@ -15,6 +15,7 @@ import type {
   GameAction,
   Player,
   ChatMessage,
+  RoomInfo,
 } from "@/types/game";
 
 // ============================================
@@ -43,10 +44,21 @@ export interface UseGameSocketReturn {
   error: string | null;
   /** チャットメッセージ一覧 */
   chatMessages: ChatMessage[];
+  /** 公開ルーム一覧 */
+  publicRooms: RoomInfo[];
+  /** ルームを作成 */
+  createRoom: (data: {
+    playerName: string;
+    roomName: string;
+    isPublic: boolean;
+    password?: string;
+  }) => void;
   /** ルームに参加 */
-  joinRoom: (roomId: string, playerName: string) => void;
+  joinRoom: (roomId: string, playerName: string, password?: string) => void;
   /** ルームから退出 */
   leaveRoom: () => void;
+  /** 公開ルーム一覧を取得 */
+  fetchPublicRooms: () => void;
   /** ゲームアクションを送信 */
   sendAction: (action: Omit<GameAction, "roomId">) => void;
   /** チャットメッセージを送信 */
@@ -81,6 +93,7 @@ export function useGameSocket(
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [publicRooms, setPublicRooms] = useState<RoomInfo[]>([]);
 
   // Ref でソケットインスタンスと現在のルームIDを保持
   const socketRef = useRef<GameSocket | null>(null);
@@ -139,6 +152,19 @@ export function useGameSocket(
     // ゲームイベントハンドラー
     // ============================================
 
+    socket.on("room_created", (data) => {
+      console.log("[useGameSocket] Room created:", data);
+
+      if (data.success) {
+        setPlayerId(data.playerId);
+        setGameState(data.gameState);
+        roomIdRef.current = data.roomId;
+        setError(null);
+      } else {
+        setError(data.error || "ルームの作成に失敗しました");
+      }
+    });
+
     socket.on("room_joined", (data) => {
       console.log("[useGameSocket] Room joined:", data);
 
@@ -150,6 +176,11 @@ export function useGameSocket(
       } else {
         setError(data.error || "ルームへの参加に失敗しました");
       }
+    });
+
+    socket.on("public_rooms", (data) => {
+      console.log("[useGameSocket] Public rooms received:", data.rooms.length);
+      setPublicRooms(data.rooms);
     });
 
     socket.on("update_state", (data) => {
@@ -203,19 +234,42 @@ export function useGameSocket(
   // ============================================
 
   /**
+   * ルームを作成
+   */
+  const createRoom = useCallback(
+    (data: {
+      playerName: string;
+      roomName: string;
+      isPublic: boolean;
+      password?: string;
+    }) => {
+      const socket = initializeSocket();
+
+      if (!socket.connected) {
+        socket.once("connect", () => {
+          socket.emit("create_room", data);
+        });
+      } else {
+        socket.emit("create_room", data);
+      }
+    },
+    [initializeSocket]
+  );
+
+  /**
    * ルームに参加
    */
   const joinRoom = useCallback(
-    (roomId: string, playerName: string) => {
+    (roomId: string, playerName: string, password?: string) => {
       const socket = initializeSocket();
 
       if (!socket.connected) {
         // 接続完了後に参加
         socket.once("connect", () => {
-          socket.emit("join_room", { roomId, playerName });
+          socket.emit("join_room", { roomId, playerName, password });
         });
       } else {
-        socket.emit("join_room", { roomId, playerName });
+        socket.emit("join_room", { roomId, playerName, password });
       }
     },
     [initializeSocket]
@@ -235,6 +289,21 @@ export function useGameSocket(
     setChatMessages([]);
     roomIdRef.current = null;
   }, []);
+
+  /**
+   * 公開ルーム一覧を取得
+   */
+  const fetchPublicRooms = useCallback(() => {
+    const socket = initializeSocket();
+
+    if (!socket.connected) {
+      socket.once("connect", () => {
+        socket.emit("get_public_rooms");
+      });
+    } else {
+      socket.emit("get_public_rooms");
+    }
+  }, [initializeSocket]);
 
   /**
    * ゲームアクションを送信
@@ -313,8 +382,11 @@ export function useGameSocket(
     playerId,
     error,
     chatMessages,
+    publicRooms,
+    createRoom,
     joinRoom,
     leaveRoom,
+    fetchPublicRooms,
     sendAction,
     sendChatMessage,
     reconnect,

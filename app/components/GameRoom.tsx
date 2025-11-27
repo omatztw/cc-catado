@@ -5,7 +5,7 @@
  * ゲームボード、プレイヤーパネル、チャット、アクションボタンを統合
  */
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useGameSocket, useCurrentPlayer, useIsMyTurn } from "../hooks/useGameSocket";
 import { GameBoard } from "./GameBoard";
 import type {
@@ -14,6 +14,7 @@ import type {
   Player,
   HoldableResource,
   ChatMessage,
+  RoomInfo,
 } from "@/types/game";
 
 // ============================================
@@ -56,51 +57,344 @@ const PHASE_LABELS: Record<GamePhase, string> = {
 // ============================================
 
 /**
- * ロビー画面（ルーム参加前）
+ * ルーム作成モーダル
  */
-function Lobby({
-  onJoinRoom,
-  error,
-  isConnecting,
+function CreateRoomModal({
+  playerName,
+  onClose,
+  onCreate,
+  isLoading,
 }: {
-  onJoinRoom: (roomId: string, playerName: string) => void;
-  error: string | null;
-  isConnecting: boolean;
+  playerName: string;
+  onClose: () => void;
+  onCreate: (data: {
+    playerName: string;
+    roomName: string;
+    isPublic: boolean;
+    password?: string;
+  }) => void;
+  isLoading: boolean;
 }) {
-  const [roomId, setRoomId] = useState("");
-  const [playerName, setPlayerName] = useState("");
+  const [roomName, setRoomName] = useState(`${playerName}のルーム`);
+  const [isPublic, setIsPublic] = useState(true);
+  const [usePassword, setUsePassword] = useState(false);
+  const [password, setPassword] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (roomId.trim() && playerName.trim()) {
-      onJoinRoom(roomId.trim(), playerName.trim());
-    }
-  };
-
-  const handleCreateRoom = () => {
-    const newRoomId = `room-${Date.now().toString(36)}`;
-    setRoomId(newRoomId);
+    onCreate({
+      playerName,
+      roomName: roomName.trim(),
+      isPublic,
+      password: usePassword ? password : undefined,
+    });
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md">
-        <h1 className="text-3xl font-bold text-center text-gray-800 mb-2">
-          カタド
-        </h1>
-        <p className="text-center text-gray-500 mb-6">
-          カタン風ボードゲーム
-        </p>
-
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-            {error}
-          </div>
-        )}
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+        <h2 className="text-xl font-bold text-gray-800 mb-4">ルームを作成</h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
+              ルーム名
+            </label>
+            <input
+              type="text"
+              value={roomName}
+              onChange={(e) => setRoomName(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="ルーム名を入力"
+              maxLength={30}
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              公開設定
+            </label>
+            <div className="flex gap-4">
+              <label className="flex items-center cursor-pointer">
+                <input
+                  type="radio"
+                  name="visibility"
+                  checked={isPublic}
+                  onChange={() => setIsPublic(true)}
+                  className="mr-2"
+                />
+                <span className="text-sm">公開（一覧に表示）</span>
+              </label>
+              <label className="flex items-center cursor-pointer">
+                <input
+                  type="radio"
+                  name="visibility"
+                  checked={!isPublic}
+                  onChange={() => setIsPublic(false)}
+                  className="mr-2"
+                />
+                <span className="text-sm">非公開</span>
+              </label>
+            </div>
+          </div>
+
+          <div>
+            <label className="flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={usePassword}
+                onChange={(e) => setUsePassword(e.target.checked)}
+                className="mr-2"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                パスワードを設定
+              </span>
+            </label>
+            {usePassword && (
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="mt-2 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="パスワードを入力"
+                required={usePassword}
+              />
+            )}
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300 transition"
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading || !roomName.trim()}
+              className="flex-1 py-2 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
+            >
+              {isLoading ? "作成中..." : "作成"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * パスワード入力モーダル
+ */
+function PasswordModal({
+  roomName,
+  onClose,
+  onSubmit,
+  isLoading,
+}: {
+  roomName: string;
+  onClose: () => void;
+  onSubmit: (password: string) => void;
+  isLoading: boolean;
+}) {
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit(password);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm">
+        <h2 className="text-xl font-bold text-gray-800 mb-2">パスワード入力</h2>
+        <p className="text-sm text-gray-600 mb-4">
+          「{roomName}」に参加するにはパスワードが必要です
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            placeholder="パスワードを入力"
+            required
+            autoFocus
+          />
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300 transition"
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading || !password}
+              className="flex-1 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
+            >
+              {isLoading ? "参加中..." : "参加"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 公開ルーム一覧
+ */
+function PublicRoomList({
+  rooms,
+  onJoin,
+  isLoading,
+}: {
+  rooms: RoomInfo[];
+  onJoin: (room: RoomInfo) => void;
+  isLoading: boolean;
+}) {
+  if (rooms.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-500">
+        <p>公開ルームはまだありません</p>
+        <p className="text-sm mt-1">新しいルームを作成してみましょう</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {rooms.map((room) => (
+        <div
+          key={room.id}
+          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition"
+        >
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-gray-800">{room.name}</span>
+              {room.hasPassword && (
+                <span className="text-yellow-600" title="パスワード保護">
+                  🔒
+                </span>
+              )}
+              {room.status === "playing" && (
+                <span className="px-2 py-0.5 text-xs bg-orange-100 text-orange-700 rounded">
+                  プレイ中
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-gray-500 mt-0.5">
+              ホスト: {room.hostName} ・ {room.playerCount}/{room.maxPlayers}人
+            </div>
+          </div>
+          <button
+            onClick={() => onJoin(room)}
+            disabled={isLoading || room.playerCount >= room.maxPlayers || room.status !== "waiting"}
+            className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
+          >
+            参加
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * ロビー画面（ルーム参加前）
+ */
+function Lobby({
+  publicRooms,
+  onCreateRoom,
+  onJoinRoom,
+  onJoinPrivateRoom,
+  onRefreshRooms,
+  error,
+  isConnecting,
+}: {
+  publicRooms: RoomInfo[];
+  onCreateRoom: (data: {
+    playerName: string;
+    roomName: string;
+    isPublic: boolean;
+    password?: string;
+  }) => void;
+  onJoinRoom: (roomId: string, playerName: string, password?: string) => void;
+  onJoinPrivateRoom: (roomId: string, playerName: string, password?: string) => void;
+  onRefreshRooms: () => void;
+  error: string | null;
+  isConnecting: boolean;
+}) {
+  const [playerName, setPlayerName] = useState("");
+  const [privateRoomId, setPrivateRoomId] = useState("");
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [passwordModal, setPasswordModal] = useState<{
+    room: RoomInfo;
+  } | null>(null);
+  const [activeTab, setActiveTab] = useState<"public" | "private">("public");
+
+  // 初回ロード時にルーム一覧を取得
+  useEffect(() => {
+    onRefreshRooms();
+  }, [onRefreshRooms]);
+
+  const handleJoinPublicRoom = (room: RoomInfo) => {
+    if (!playerName.trim()) {
+      alert("プレイヤー名を入力してください");
+      return;
+    }
+
+    if (room.hasPassword) {
+      setPasswordModal({ room });
+    } else {
+      onJoinRoom(room.id, playerName.trim());
+    }
+  };
+
+  const handlePasswordSubmit = (password: string) => {
+    if (passwordModal) {
+      onJoinRoom(passwordModal.room.id, playerName.trim(), password);
+      setPasswordModal(null);
+    }
+  };
+
+  const handleJoinPrivateRoom = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (playerName.trim() && privateRoomId.trim()) {
+      onJoinPrivateRoom(privateRoomId.trim(), playerName.trim());
+    }
+  };
+
+  const handleCreateRoom = (data: {
+    playerName: string;
+    roomName: string;
+    isPublic: boolean;
+    password?: string;
+  }) => {
+    onCreateRoom(data);
+    setShowCreateModal(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 p-4">
+      <div className="max-w-2xl mx-auto">
+        {/* ヘッダー */}
+        <div className="text-center mb-6 pt-8">
+          <h1 className="text-4xl font-bold text-white mb-2">カタド</h1>
+          <p className="text-blue-200">カタン風ボードゲーム</p>
+        </div>
+
+        {/* メインカード */}
+        <div className="bg-white rounded-xl shadow-2xl overflow-hidden">
+          {/* プレイヤー名入力 */}
+          <div className="p-6 border-b bg-gray-50">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
               プレイヤー名
             </label>
             <input
@@ -108,48 +402,131 @@ function Lobby({
               value={playerName}
               onChange={(e) => setPlayerName(e.target.value)}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="名前を入力"
+              placeholder="名前を入力してください"
               maxLength={20}
-              required
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              ルームID
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={roomId}
-                onChange={(e) => setRoomId(e.target.value)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="ルームIDを入力"
-                required
-              />
-              <button
-                type="button"
-                onClick={handleCreateRoom}
-                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
-              >
-                新規作成
-              </button>
+          {/* エラー表示 */}
+          {error && (
+            <div className="bg-red-100 border-b border-red-400 text-red-700 px-6 py-3 text-sm">
+              {error}
             </div>
+          )}
+
+          {/* タブ */}
+          <div className="flex border-b">
+            <button
+              onClick={() => setActiveTab("public")}
+              className={`flex-1 py-3 text-sm font-medium transition ${
+                activeTab === "public"
+                  ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              公開ルーム
+            </button>
+            <button
+              onClick={() => setActiveTab("private")}
+              className={`flex-1 py-3 text-sm font-medium transition ${
+                activeTab === "private"
+                  ? "text-blue-600 border-b-2 border-blue-600 bg-blue-50"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              ルームIDで参加
+            </button>
           </div>
 
-          <button
-            type="submit"
-            disabled={isConnecting || !roomId.trim() || !playerName.trim()}
-            className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
-          >
-            {isConnecting ? "接続中..." : "ルームに参加"}
-          </button>
-        </form>
+          {/* タブコンテンツ */}
+          <div className="p-6">
+            {activeTab === "public" ? (
+              <>
+                {/* アクションバー */}
+                <div className="flex justify-between items-center mb-4">
+                  <button
+                    onClick={onRefreshRooms}
+                    disabled={isConnecting}
+                    className="text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-400"
+                  >
+                    ↻ 更新
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!playerName.trim()) {
+                        alert("プレイヤー名を入力してください");
+                        return;
+                      }
+                      setShowCreateModal(true);
+                    }}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition"
+                  >
+                    + 新しいルームを作成
+                  </button>
+                </div>
 
-        <p className="mt-6 text-xs text-center text-gray-400">
+                {/* ルーム一覧 */}
+                <PublicRoomList
+                  rooms={publicRooms}
+                  onJoin={handleJoinPublicRoom}
+                  isLoading={isConnecting}
+                />
+              </>
+            ) : (
+              <form onSubmit={handleJoinPrivateRoom} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    ルームID
+                  </label>
+                  <input
+                    type="text"
+                    value={privateRoomId}
+                    onChange={(e) => setPrivateRoomId(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="ルームIDを入力"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={
+                    isConnecting || !playerName.trim() || !privateRoomId.trim()
+                  }
+                  className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
+                >
+                  {isConnecting ? "接続中..." : "参加"}
+                </button>
+                <p className="text-xs text-gray-500 text-center">
+                  ルームIDは作成者から共有してもらってください
+                </p>
+              </form>
+            )}
+          </div>
+        </div>
+
+        {/* フッター */}
+        <p className="mt-6 text-xs text-center text-blue-200">
           3〜4人でプレイ可能
         </p>
       </div>
+
+      {/* モーダル */}
+      {showCreateModal && (
+        <CreateRoomModal
+          playerName={playerName}
+          onClose={() => setShowCreateModal(false)}
+          onCreate={handleCreateRoom}
+          isLoading={isConnecting}
+        />
+      )}
+
+      {passwordModal && (
+        <PasswordModal
+          roomName={passwordModal.room.name}
+          onClose={() => setPasswordModal(null)}
+          onSubmit={handlePasswordSubmit}
+          isLoading={isConnecting}
+        />
+      )}
     </div>
   );
 }
@@ -237,11 +614,6 @@ function ActionPanel({
   const isMyTurn = gameState.currentPlayerId === playerId;
   const phase = gameState.phase;
 
-  // 選択モード状態
-  const [selectionMode, setSelectionMode] = useState<
-    "none" | "settlement" | "road" | "robber"
-  >("none");
-
   const handleStartGame = () => {
     onAction({ type: "start_game" });
   };
@@ -316,39 +688,13 @@ function ActionPanel({
             onClick={handleRollDice}
             className="w-full py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition"
           >
-            🎲 サイコロを振る
+            サイコロを振る
           </button>
         )}
 
         {/* メインフェーズのアクション */}
         {phase === "main" && isMyTurn && (
           <>
-            <button
-              onClick={() =>
-                setSelectionMode(
-                  selectionMode === "settlement" ? "none" : "settlement"
-                )
-              }
-              className={`w-full py-2 rounded-lg font-semibold transition ${
-                selectionMode === "settlement"
-                  ? "bg-yellow-500 text-white"
-                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-              }`}
-            >
-              🏠 開拓地を建設
-            </button>
-            <button
-              onClick={() =>
-                setSelectionMode(selectionMode === "road" ? "none" : "road")
-              }
-              className={`w-full py-2 rounded-lg font-semibold transition ${
-                selectionMode === "road"
-                  ? "bg-yellow-500 text-white"
-                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-              }`}
-            >
-              🛤️ 道を建設
-            </button>
             <button
               onClick={handleEndTurn}
               className="w-full py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition"
@@ -474,8 +820,11 @@ export function GameRoom() {
     playerId,
     error,
     chatMessages,
+    publicRooms,
+    createRoom,
     joinRoom,
     leaveRoom,
+    fetchPublicRooms,
     sendAction,
     sendChatMessage,
   } = useGameSocket();
@@ -579,7 +928,11 @@ export function GameRoom() {
   if (!gameState) {
     return (
       <Lobby
+        publicRooms={publicRooms}
+        onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
+        onJoinPrivateRoom={joinRoom}
+        onRefreshRooms={fetchPublicRooms}
         error={error}
         isConnecting={isConnecting}
       />

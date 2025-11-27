@@ -263,10 +263,23 @@ export interface GameState {
  * クライアント → サーバー のイベント
  */
 export interface ClientToServerEvents {
+  // ルーム作成
+  create_room: (data: {
+    playerName: string;
+    roomName: string;
+    isPublic: boolean;
+    password?: string;
+  }) => void;
   // ルーム参加
-  join_room: (data: { roomId: string; playerName: string }) => void;
+  join_room: (data: {
+    roomId: string;
+    playerName: string;
+    password?: string;
+  }) => void;
   // ルーム退出
   leave_room: (data: { roomId: string }) => void;
+  // 公開ルーム一覧取得
+  get_public_rooms: () => void;
   // ゲームアクション
   game_action: (data: GameAction) => void;
   // チャットメッセージ送信
@@ -277,6 +290,14 @@ export interface ClientToServerEvents {
  * サーバー → クライアント のイベント
  */
 export interface ServerToClientEvents {
+  // ルーム作成結果
+  room_created: (data: {
+    success: boolean;
+    roomId: string;
+    playerId: string;
+    gameState: GameState | null;
+    error?: string;
+  }) => void;
   // ルーム参加結果
   room_joined: (data: {
     success: boolean;
@@ -285,6 +306,8 @@ export interface ServerToClientEvents {
     gameState: GameState | null;
     error?: string;
   }) => void;
+  // 公開ルーム一覧
+  public_rooms: (data: { rooms: RoomInfo[] }) => void;
   // ゲーム状態更新
   update_state: (data: { gameState: GameState }) => void;
   // プレイヤー参加通知
@@ -406,9 +429,13 @@ export type GameAction =
  */
 export interface RoomInfo {
   id: string;
+  name: string;
   playerCount: number;
   maxPlayers: number;
   status: "waiting" | "playing" | "finished";
+  isPublic: boolean;
+  hasPassword: boolean;
+  hostName: string;
   createdAt: string;
 }
 
