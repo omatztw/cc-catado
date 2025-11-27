@@ -41,3 +41,6 @@ coverage/
 
 # Misc
 *.log
+
+# Redis
+dump.rdb
