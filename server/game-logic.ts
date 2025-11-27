@@ -19,10 +19,11 @@ import type {
   VertexCoordinate,
   EdgeCoordinate,
   DiceResult,
-  BUILD_COSTS,
+  PlayerResources,
+} from "@/types/game";
+import {
   INITIAL_RESOURCES,
   INITIAL_PIECES,
-  PlayerResources,
 } from "@/types/game";
 
 // ============================================
