@@ -95,6 +95,9 @@ const STANDARD_HEX_COORDS: CubeCoordinate[] = [
   { q: 1, r: -2, s: 1 },
 ];
 
+// ボード上の有効な六角形座標のセット（検証用）
+const VALID_HEX_IDS = new Set(STANDARD_HEX_COORDS.map(cubeToId));
+
 // ============================================
 // ユーティリティ関数
 // ============================================
@@ -130,6 +133,135 @@ function vertexToId(coord: VertexCoordinate): string {
  */
 function edgeToId(coord: EdgeCoordinate): string {
   return `${cubeToId(coord.hex)}_${coord.direction}`;
+}
+
+/**
+ * 頂点に隣接する六角形座標を取得
+ * 各頂点は最大3つの六角形に隣接
+ */
+function getAdjacentHexesForVertex(vertex: VertexCoordinate): CubeCoordinate[] {
+  const { hex, direction } = vertex;
+  if (direction === "N") {
+    return [
+      hex,
+      { q: hex.q, r: hex.r - 1, s: hex.s + 1 },
+      { q: hex.q + 1, r: hex.r - 1, s: hex.s },
+    ];
+  } else {
+    // S
+    return [
+      hex,
+      { q: hex.q, r: hex.r + 1, s: hex.s - 1 },
+      { q: hex.q - 1, r: hex.r + 1, s: hex.s },
+    ];
+  }
+}
+
+/**
+ * 頂点がボード上の有効な位置かどうかを確認
+ * 少なくとも1つの有効な六角形に隣接している必要がある
+ */
+function isValidIntersection(vertex: VertexCoordinate): boolean {
+  const adjacentHexes = getAdjacentHexesForVertex(vertex);
+  return adjacentHexes.some((hex) => VALID_HEX_IDS.has(cubeToId(hex)));
+}
+
+/**
+ * 頂点に隣接する頂点を取得（2マスルール検証用）
+ */
+function getAdjacentVertices(vertex: VertexCoordinate): VertexCoordinate[] {
+  const { hex, direction } = vertex;
+  if (direction === "N") {
+    return [
+      // 北東
+      { hex: { q: hex.q + 1, r: hex.r - 1, s: hex.s }, direction: "S" },
+      // 北西
+      { hex: { q: hex.q, r: hex.r - 1, s: hex.s + 1 }, direction: "S" },
+      // 南（同じ六角形）
+      { hex, direction: "S" },
+    ];
+  } else {
+    // S
+    return [
+      // 南東
+      { hex: { q: hex.q, r: hex.r + 1, s: hex.s - 1 }, direction: "N" },
+      // 南西
+      { hex: { q: hex.q - 1, r: hex.r + 1, s: hex.s }, direction: "N" },
+      // 北（同じ六角形）
+      { hex, direction: "N" },
+    ];
+  }
+}
+
+/**
+ * 頂点に隣接する辺を取得
+ */
+function getAdjacentEdgesForVertex(vertex: VertexCoordinate): EdgeCoordinate[] {
+  const { hex, direction } = vertex;
+  if (direction === "N") {
+    return [
+      { hex, direction: "NE" },
+      { hex: { q: hex.q, r: hex.r - 1, s: hex.s + 1 }, direction: "E" },
+      { hex: { q: hex.q, r: hex.r - 1, s: hex.s + 1 }, direction: "SE" },
+    ];
+  } else {
+    // S
+    return [
+      { hex, direction: "SE" },
+      { hex: { q: hex.q - 1, r: hex.r + 1, s: hex.s }, direction: "E" },
+      { hex: { q: hex.q - 1, r: hex.r + 1, s: hex.s }, direction: "NE" },
+    ];
+  }
+}
+
+/**
+ * 辺に隣接する頂点を取得
+ */
+function getAdjacentVerticesForEdge(edge: EdgeCoordinate): VertexCoordinate[] {
+  const { hex, direction } = edge;
+  switch (direction) {
+    case "NE":
+      return [
+        { hex, direction: "N" },
+        { hex: { q: hex.q + 1, r: hex.r - 1, s: hex.s }, direction: "S" },
+      ];
+    case "E":
+      return [
+        { hex: { q: hex.q + 1, r: hex.r - 1, s: hex.s }, direction: "S" },
+        { hex: { q: hex.q + 1, r: hex.r, s: hex.s - 1 }, direction: "N" },
+      ];
+    case "SE":
+      return [
+        { hex: { q: hex.q + 1, r: hex.r, s: hex.s - 1 }, direction: "N" },
+        { hex, direction: "S" },
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
+ * 頂点IDから座標を解析
+ */
+function parseVertexId(id: string): VertexCoordinate | null {
+  const match = id.match(/^(-?\d+),(-?\d+),(-?\d+)_(N|S)$/);
+  if (!match) return null;
+  return {
+    hex: { q: parseInt(match[1]), r: parseInt(match[2]), s: parseInt(match[3]) },
+    direction: match[4] as "N" | "S",
+  };
+}
+
+/**
+ * 辺IDから座標を解析
+ */
+function parseEdgeId(id: string): EdgeCoordinate | null {
+  const match = id.match(/^(-?\d+),(-?\d+),(-?\d+)_(NE|E|SE)$/);
+  if (!match) return null;
+  return {
+    hex: { q: parseInt(match[1]), r: parseInt(match[2]), s: parseInt(match[3]) },
+    direction: match[4] as "NE" | "E" | "SE",
+  };
 }
 
 /**
@@ -202,6 +334,7 @@ function getHexEdges(hex: CubeCoordinate): EdgeCoordinate[] {
 
 /**
  * 頂点（Intersection）を生成
+ * ボード上の有効な位置のみ含める（海に突き出た頂点を除外）
  */
 function generateIntersections(hexes: Hex[]): Intersection[] {
   const intersectionMap = new Map<string, Intersection>();
@@ -210,7 +343,7 @@ function generateIntersections(hexes: Hex[]): Intersection[] {
     const vertices = getHexVertices(hex.coordinate);
     for (const vertex of vertices) {
       const id = vertexToId(vertex);
-      if (!intersectionMap.has(id)) {
+      if (!intersectionMap.has(id) && isValidIntersection(vertex)) {
         intersectionMap.set(id, {
           id,
           coordinate: vertex,
@@ -513,6 +646,18 @@ export function handleBuildSettlement(
     throw new Error("Intersection already occupied");
   }
 
+  // 2マスルール: 隣接する頂点に建物がないことを確認
+  const vertex = parseVertexId(intersectionId);
+  if (!vertex) throw new Error("Invalid intersection ID");
+
+  const adjacentVertexIds = getAdjacentVertices(vertex).map(vertexToId);
+  for (const adjId of adjacentVertexIds) {
+    const adjIntersection = state.intersections.find((i) => i.id === adjId);
+    if (adjIntersection?.building) {
+      throw new Error("開拓地は他の建物から2マス以上離す必要があります");
+    }
+  }
+
   // 初期配置フェーズでない場合はコストを確認
   const isSetupPhase =
     state.phase === "setup_settlement_1" ||
@@ -531,6 +676,16 @@ export function handleBuildSettlement(
       player.resources.sheep < 1
     ) {
       throw new Error("Not enough resources");
+    }
+
+    // メインフェーズでは自分の道に隣接している必要がある
+    const adjacentEdgeIds = getAdjacentEdgesForVertex(vertex).map(edgeToId);
+    const hasConnectedRoad = adjacentEdgeIds.some((edgeId) => {
+      const edge = state.edges.find((e) => e.id === edgeId);
+      return edge?.road?.playerId === playerId;
+    });
+    if (!hasConnectedRoad) {
+      throw new Error("開拓地は自分の道に隣接している必要があります");
     }
   }
 
@@ -610,7 +765,36 @@ export function handleBuildRoad(
   const isSetupPhase =
     state.phase === "setup_road_1" || state.phase === "setup_road_2";
 
-  if (!isSetupPhase) {
+  // 辺の座標を解析
+  const edgeCoord = parseEdgeId(edgeId);
+  if (!edgeCoord) throw new Error("Invalid edge ID");
+
+  // 辺に隣接する頂点を取得
+  const adjacentVertexIds = getAdjacentVerticesForEdge(edgeCoord).map(vertexToId);
+
+  if (isSetupPhase) {
+    // 初期配置フェーズでは、直前に配置した開拓地に隣接している必要がある
+    // プレイヤーの開拓地数から何個目の配置かを判定
+    const playerSettlementCount = 5 - player.remainingPieces.settlements;
+
+    // プレイヤーの開拓地を取得（最後に配置したものを特定）
+    const playerSettlements = state.intersections.filter(
+      (i) => i.building?.playerId === playerId && i.building.type === "settlement"
+    );
+
+    // 最後に配置した開拓地（setup_road_1なら1つ目、setup_road_2なら2つ目）
+    const targetSettlementIndex = state.phase === "setup_road_1" ? 0 : 1;
+    const targetSettlement = playerSettlements[targetSettlementIndex];
+
+    if (!targetSettlement) {
+      throw new Error("開拓地が見つかりません");
+    }
+
+    // 道が開拓地に隣接しているか確認
+    if (!adjacentVertexIds.includes(targetSettlement.id)) {
+      throw new Error("道は直前に配置した開拓地に隣接している必要があります");
+    }
+  } else {
     if (state.phase !== "main") {
       throw new Error("Cannot build in current phase");
     }
@@ -618,6 +802,30 @@ export function handleBuildRoad(
     // コスト確認（wood:1, brick:1）
     if (player.resources.wood < 1 || player.resources.brick < 1) {
       throw new Error("Not enough resources");
+    }
+
+    // メインフェーズでは自分の道または建物に隣接している必要がある
+    const hasConnection = adjacentVertexIds.some((vertexId) => {
+      // 建物に隣接しているか
+      const intersection = state.intersections.find((i) => i.id === vertexId);
+      if (intersection?.building?.playerId === playerId) {
+        return true;
+      }
+
+      // この頂点に隣接する他の道に接続しているか
+      const vertex = parseVertexId(vertexId);
+      if (!vertex) return false;
+
+      const vertexAdjacentEdges = getAdjacentEdgesForVertex(vertex).map(edgeToId);
+      return vertexAdjacentEdges.some((adjEdgeId) => {
+        if (adjEdgeId === edgeId) return false; // 自分自身は除く
+        const adjEdge = state.edges.find((e) => e.id === adjEdgeId);
+        return adjEdge?.road?.playerId === playerId;
+      });
+    });
+
+    if (!hasConnection) {
+      throw new Error("道は自分の道または建物に隣接している必要があります");
     }
   }
 
