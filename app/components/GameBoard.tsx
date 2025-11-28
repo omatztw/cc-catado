@@ -92,6 +92,7 @@ function getVertexPixel(
 
 /**
  * 辺の中点のピクセル座標を計算
+ * 角度は辺に沿った方向（頂点間を結ぶ方向）
  */
 function getEdgePixel(
   hexCoord: CubeCoordinate,
@@ -104,19 +105,19 @@ function getEdgePixel(
       return {
         x: hexPixel.x + HEX_WIDTH / 4,
         y: hexPixel.y - (3 * HEX_SIZE) / 4,
-        angle: -60,
+        angle: 30, // 辺に沿った角度（右下がり）
       };
     case "E":
       return {
         x: hexPixel.x + HEX_WIDTH / 2,
         y: hexPixel.y,
-        angle: 0,
+        angle: 90, // 垂直
       };
     case "SE":
       return {
         x: hexPixel.x + HEX_WIDTH / 4,
         y: hexPixel.y + (3 * HEX_SIZE) / 4,
-        angle: 60,
+        angle: 150, // 辺に沿った角度（右上がり）
       };
   }
 }
