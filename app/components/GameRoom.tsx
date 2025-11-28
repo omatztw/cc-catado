@@ -613,6 +613,25 @@ function ActionPanel({
 }) {
   const isMyTurn = gameState.currentPlayerId === playerId;
   const phase = gameState.phase;
+  const currentPlayer = gameState.players.find((p) => p.id === playerId);
+
+  // 資源破棄用のstate
+  const [discardResources, setDiscardResources] = useState<
+    Record<HoldableResource, number>
+  >({
+    wood: 0,
+    brick: 0,
+    wheat: 0,
+    ore: 0,
+    sheep: 0,
+  });
+
+  // 銀行交易用のstate
+  const [showBankTrade, setShowBankTrade] = useState(false);
+  const [tradeGiveResource, setTradeGiveResource] =
+    useState<HoldableResource>("wood");
+  const [tradeReceiveResource, setTradeReceiveResource] =
+    useState<HoldableResource>("brick");
 
   const handleStartGame = () => {
     onAction({ type: "start_game" });
@@ -624,6 +643,70 @@ function ActionPanel({
 
   const handleEndTurn = () => {
     onAction({ type: "end_turn" });
+  };
+
+  const handleStealResource = (targetPlayerId: string) => {
+    onAction({ type: "steal_resource", targetPlayerId });
+  };
+
+  const handleDiscardResources = () => {
+    onAction({ type: "discard_resources", resources: discardResources });
+  };
+
+  const handleBankTrade = () => {
+    onAction({
+      type: "trade_with_bank",
+      give: { resource: tradeGiveResource, amount: 4 },
+      receive: tradeReceiveResource,
+    });
+    setShowBankTrade(false);
+  };
+
+  // 破棄に必要な枚数を計算
+  const totalResources = currentPlayer
+    ? Object.values(currentPlayer.resources).reduce((sum, c) => sum + c, 0)
+    : 0;
+  const requiredDiscard = Math.floor(totalResources / 2);
+  const currentDiscardCount = Object.values(discardResources).reduce(
+    (sum, c) => sum + c,
+    0
+  );
+
+  // 盗賊に隣接するプレイヤーを取得
+  const getStealablePlayerIds = (): string[] => {
+    const robberHex = gameState.hexes.find((h) => h.hasRobber);
+    if (!robberHex) return [];
+
+    const adjacentPlayerIds = new Set<string>();
+    gameState.intersections.forEach((intersection) => {
+      if (
+        intersection.building &&
+        intersection.building.playerId !== playerId
+      ) {
+        // 簡易的な隣接チェック（hexIdが含まれるか）
+        const hexId = robberHex.id;
+        if (intersection.id.includes(hexId.split(",")[0])) {
+          adjacentPlayerIds.add(intersection.building.playerId);
+        }
+      }
+    });
+
+    // より正確な方法: 隣接判定
+    const robberCoord = robberHex.coordinate;
+    gameState.intersections.forEach((i) => {
+      if (i.building && i.building.playerId !== playerId) {
+        const vertexHex = i.coordinate.hex;
+        // 同じ六角形または隣接している場合
+        const dx = Math.abs(vertexHex.q - robberCoord.q);
+        const dy = Math.abs(vertexHex.r - robberCoord.r);
+        const dz = Math.abs(vertexHex.s - robberCoord.s);
+        if (dx <= 1 && dy <= 1 && dz <= 1) {
+          adjacentPlayerIds.add(i.building.playerId);
+        }
+      }
+    });
+
+    return Array.from(adjacentPlayerIds);
   };
 
   // 待機中
@@ -695,6 +778,80 @@ function ActionPanel({
         {/* メインフェーズのアクション */}
         {phase === "main" && isMyTurn && (
           <>
+            <p className="text-xs text-gray-500 mb-2">
+              建設: ボード上でクリック
+            </p>
+
+            {/* 銀行交易 */}
+            {!showBankTrade ? (
+              <button
+                onClick={() => setShowBankTrade(true)}
+                className="w-full py-2 bg-yellow-600 text-white rounded-lg font-semibold hover:bg-yellow-700 transition"
+              >
+                銀行と交易 (4:1)
+              </button>
+            ) : (
+              <div className="bg-yellow-50 p-3 rounded-lg space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">渡す:</span>
+                  <select
+                    value={tradeGiveResource}
+                    onChange={(e) =>
+                      setTradeGiveResource(e.target.value as HoldableResource)
+                    }
+                    className="flex-1 px-2 py-1 border rounded text-sm"
+                  >
+                    {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map(
+                      (r) => (
+                        <option key={r} value={r}>
+                          {RESOURCE_ICONS[r]} {RESOURCE_LABELS[r]} (
+                          {currentPlayer?.resources[r] || 0})
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <span className="text-sm">×4</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">受取:</span>
+                  <select
+                    value={tradeReceiveResource}
+                    onChange={(e) =>
+                      setTradeReceiveResource(e.target.value as HoldableResource)
+                    }
+                    className="flex-1 px-2 py-1 border rounded text-sm"
+                  >
+                    {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map(
+                      (r) => (
+                        <option key={r} value={r}>
+                          {RESOURCE_ICONS[r]} {RESOURCE_LABELS[r]}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <span className="text-sm">×1</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleBankTrade}
+                    disabled={
+                      !currentPlayer ||
+                      currentPlayer.resources[tradeGiveResource] < 4
+                    }
+                    className="flex-1 py-1 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700 disabled:bg-gray-400 transition"
+                  >
+                    交換
+                  </button>
+                  <button
+                    onClick={() => setShowBankTrade(false)}
+                    className="px-3 py-1 bg-gray-300 rounded text-sm hover:bg-gray-400 transition"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={handleEndTurn}
               className="w-full py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition"
@@ -726,8 +883,90 @@ function ActionPanel({
           </p>
         )}
 
+        {/* 盗賊略奪フェーズ */}
+        {phase === "robber_steal" && isMyTurn && (
+          <div className="space-y-2">
+            <p className="text-sm text-gray-600">
+              資源を奪うプレイヤーを選択:
+            </p>
+            {getStealablePlayerIds().map((targetId) => {
+              const targetPlayer = gameState.players.find(
+                (p) => p.id === targetId
+              );
+              return (
+                <button
+                  key={targetId}
+                  onClick={() => handleStealResource(targetId)}
+                  className="w-full py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition"
+                >
+                  {targetPlayer?.name} から奪う
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 資源破棄フェーズ */}
+        {phase === "discard" && totalResources > 7 && (
+          <div className="space-y-2">
+            <p className="text-sm text-gray-600">
+              {requiredDiscard}枚の資源を破棄してください ({currentDiscardCount}/
+              {requiredDiscard})
+            </p>
+            <div className="grid grid-cols-5 gap-1">
+              {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map(
+                (resource) => (
+                  <div key={resource} className="text-center">
+                    <div className="text-lg">{RESOURCE_ICONS[resource]}</div>
+                    <div className="text-xs">
+                      {currentPlayer?.resources[resource] || 0}
+                    </div>
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={() =>
+                          setDiscardResources((prev) => ({
+                            ...prev,
+                            [resource]: Math.max(0, prev[resource] - 1),
+                          }))
+                        }
+                        className="w-5 h-5 bg-gray-200 rounded text-xs"
+                      >
+                        -
+                      </button>
+                      <span className="text-sm font-medium">
+                        {discardResources[resource]}
+                      </span>
+                      <button
+                        onClick={() =>
+                          setDiscardResources((prev) => ({
+                            ...prev,
+                            [resource]: Math.min(
+                              currentPlayer?.resources[resource] || 0,
+                              prev[resource] + 1
+                            ),
+                          }))
+                        }
+                        className="w-5 h-5 bg-gray-200 rounded text-xs"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+            <button
+              onClick={handleDiscardResources}
+              disabled={currentDiscardCount !== requiredDiscard}
+              className="w-full py-2 bg-orange-600 text-white rounded-lg font-semibold hover:bg-orange-700 disabled:bg-gray-400 transition"
+            >
+              破棄する
+            </button>
+          </div>
+        )}
+
         {/* 他のプレイヤーのターン */}
-        {!isMyTurn && phase !== "waiting" && phase !== "game_over" && (
+        {!isMyTurn && phase !== "waiting" && phase !== "game_over" && phase !== "discard" && (
           <p className="text-sm text-gray-500 text-center">
             {
               gameState.players.find(
@@ -829,7 +1068,7 @@ export function GameRoom() {
     sendChatMessage,
   } = useGameSocket();
 
-  // 選択可能な要素（初期配置フェーズ用）
+  // 選択可能な要素
   const selectableIntersections = useMemo(() => {
     if (!gameState || !playerId) return [];
 
@@ -846,6 +1085,21 @@ export function GameRoom() {
         .map((i) => i.id);
     }
 
+    // メインフェーズ: 空き頂点（開拓地用）と自分の開拓地（都市化用）
+    if (isMyTurn && phase === "main") {
+      const emptyIntersections = gameState.intersections
+        .filter((i) => !i.building)
+        .map((i) => i.id);
+      const mySettlements = gameState.intersections
+        .filter(
+          (i) =>
+            i.building?.playerId === playerId &&
+            i.building.type === "settlement"
+        )
+        .map((i) => i.id);
+      return [...emptyIntersections, ...mySettlements];
+    }
+
     return [];
   }, [gameState, playerId]);
 
@@ -860,6 +1114,11 @@ export function GameRoom() {
       isMyTurn &&
       (phase === "setup_road_1" || phase === "setup_road_2")
     ) {
+      return gameState.edges.filter((e) => !e.road).map((e) => e.id);
+    }
+
+    // メインフェーズ: 空き辺
+    if (isMyTurn && phase === "main") {
       return gameState.edges.filter((e) => !e.road).map((e) => e.id);
     }
 
@@ -886,12 +1145,26 @@ export function GameRoom() {
       if (!gameState || !playerId) return;
 
       const phase = gameState.phase;
+      const intersection = gameState.intersections.find(
+        (i) => i.id === intersectionId
+      );
+
       if (
         phase === "setup_settlement_1" ||
-        phase === "setup_settlement_2" ||
-        phase === "main"
+        phase === "setup_settlement_2"
       ) {
         sendAction({ type: "build_settlement", intersectionId });
+      } else if (phase === "main") {
+        // 自分の開拓地をクリックしたら都市化
+        if (
+          intersection?.building?.playerId === playerId &&
+          intersection.building.type === "settlement"
+        ) {
+          sendAction({ type: "build_city", intersectionId });
+        } else {
+          // 空の頂点なら開拓地建設
+          sendAction({ type: "build_settlement", intersectionId });
+        }
       }
     },
     [gameState, playerId, sendAction]

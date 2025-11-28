@@ -980,6 +980,291 @@ export function handleMoveRobber(
   };
 }
 
+/**
+ * 資源を略奪（盗賊）
+ */
+export function handleStealResource(
+  state: GameState,
+  playerId: string,
+  targetPlayerId: string
+): GameState {
+  if (state.phase !== "robber_steal") {
+    throw new Error("Cannot steal in current phase");
+  }
+
+  if (state.currentPlayerId !== playerId) {
+    throw new Error("Not your turn");
+  }
+
+  if (targetPlayerId === playerId) {
+    throw new Error("Cannot steal from yourself");
+  }
+
+  const targetPlayer = state.players.find((p) => p.id === targetPlayerId);
+  if (!targetPlayer) throw new Error("Target player not found");
+
+  // 対象プレイヤーが盗賊のいるタイルに隣接しているか確認
+  const robberHex = state.hexes.find((h) => h.hasRobber);
+  if (!robberHex) throw new Error("Robber hex not found");
+
+  const adjacentVertexIds = getHexVertices(robberHex.coordinate).map(vertexToId);
+  const isAdjacent = adjacentVertexIds.some((vertexId) => {
+    const intersection = state.intersections.find((i) => i.id === vertexId);
+    return intersection?.building?.playerId === targetPlayerId;
+  });
+
+  if (!isAdjacent) {
+    throw new Error("Target player is not adjacent to the robber");
+  }
+
+  // 対象の持っている資源からランダムに1つ奪う
+  const targetResources = targetPlayer.resources;
+  const availableResources: HoldableResource[] = [];
+
+  (Object.keys(targetResources) as HoldableResource[]).forEach((resource) => {
+    for (let i = 0; i < targetResources[resource]; i++) {
+      availableResources.push(resource);
+    }
+  });
+
+  let updatedPlayers = state.players;
+
+  if (availableResources.length > 0) {
+    const stolenResource =
+      availableResources[Math.floor(Math.random() * availableResources.length)];
+
+    updatedPlayers = state.players.map((p) => {
+      if (p.id === playerId) {
+        return {
+          ...p,
+          resources: {
+            ...p.resources,
+            [stolenResource]: p.resources[stolenResource] + 1,
+          },
+        };
+      }
+      if (p.id === targetPlayerId) {
+        return {
+          ...p,
+          resources: {
+            ...p.resources,
+            [stolenResource]: p.resources[stolenResource] - 1,
+          },
+        };
+      }
+      return p;
+    });
+  }
+
+  return {
+    ...state,
+    players: updatedPlayers,
+    phase: "main",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 都市を建設
+ */
+export function handleBuildCity(
+  state: GameState,
+  playerId: string,
+  intersectionId: string
+): GameState {
+  if (state.phase !== "main") {
+    throw new Error("Cannot build city in current phase");
+  }
+
+  if (state.currentPlayerId !== playerId) {
+    throw new Error("Not your turn");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  const intersection = state.intersections.find((i) => i.id === intersectionId);
+  if (!intersection) throw new Error("Intersection not found");
+
+  // 自分の開拓地がある場所のみ都市化可能
+  if (
+    !intersection.building ||
+    intersection.building.playerId !== playerId ||
+    intersection.building.type !== "settlement"
+  ) {
+    throw new Error("自分の開拓地がある場所にのみ都市を建設できます");
+  }
+
+  // コスト確認（wheat: 2, ore: 3）
+  if (player.resources.wheat < 2 || player.resources.ore < 3) {
+    throw new Error("資源が足りません（小麦2、鉱石3が必要）");
+  }
+
+  // 残り建造物数を確認
+  if (player.remainingPieces.cities <= 0) {
+    throw new Error("都市の残りがありません");
+  }
+
+  // 頂点を更新
+  const updatedIntersections = state.intersections.map((i) =>
+    i.id === intersectionId
+      ? { ...i, building: { type: "city" as const, playerId } }
+      : i
+  );
+
+  // プレイヤーを更新
+  const updatedPlayers = state.players.map((p) => {
+    if (p.id !== playerId) return p;
+
+    return {
+      ...p,
+      resources: {
+        ...p.resources,
+        wheat: p.resources.wheat - 2,
+        ore: p.resources.ore - 3,
+      },
+      remainingPieces: {
+        ...p.remainingPieces,
+        settlements: p.remainingPieces.settlements + 1, // 開拓地を回収
+        cities: p.remainingPieces.cities - 1,
+      },
+      visibleVictoryPoints: p.visibleVictoryPoints + 1, // 都市は2点だが、開拓地の1点を置き換え
+    };
+  });
+
+  return {
+    ...state,
+    intersections: updatedIntersections,
+    players: updatedPlayers,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 資源を破棄（7が出た時、8枚以上持っている場合）
+ */
+export function handleDiscardResources(
+  state: GameState,
+  playerId: string,
+  resources: Partial<Record<HoldableResource, number>>
+): GameState {
+  if (state.phase !== "discard") {
+    throw new Error("Cannot discard in current phase");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  // 現在の資源合計
+  const totalResources = Object.values(player.resources).reduce(
+    (sum, count) => sum + count,
+    0
+  );
+
+  // 8枚以上持っていないプレイヤーは破棄不要
+  if (totalResources <= 7) {
+    throw new Error("破棄する必要はありません");
+  }
+
+  // 破棄する枚数を計算
+  const discardCount = Object.values(resources).reduce(
+    (sum, count) => sum + (count || 0),
+    0
+  );
+  const requiredDiscard = Math.floor(totalResources / 2);
+
+  if (discardCount !== requiredDiscard) {
+    throw new Error(`${requiredDiscard}枚破棄する必要があります`);
+  }
+
+  // 破棄する資源が実際に持っているか確認
+  for (const [resource, count] of Object.entries(resources)) {
+    if (count && player.resources[resource as HoldableResource] < count) {
+      throw new Error(`${resource}が足りません`);
+    }
+  }
+
+  // プレイヤーの資源を更新
+  const updatedPlayers = state.players.map((p) => {
+    if (p.id !== playerId) return p;
+
+    const newResources = { ...p.resources };
+    for (const [resource, count] of Object.entries(resources)) {
+      if (count) {
+        newResources[resource as HoldableResource] -= count;
+      }
+    }
+
+    return { ...p, resources: newResources };
+  });
+
+  // 全員が破棄完了したか確認
+  const stillNeedToDiscard = updatedPlayers.some((p) => {
+    const total = Object.values(p.resources).reduce((sum, c) => sum + c, 0);
+    return total > 7;
+  });
+
+  return {
+    ...state,
+    players: updatedPlayers,
+    phase: stillNeedToDiscard ? "discard" : "robber_move",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 銀行との交易
+ */
+export function handleTradeWithBank(
+  state: GameState,
+  playerId: string,
+  give: { resource: HoldableResource; amount: number },
+  receive: HoldableResource
+): GameState {
+  if (state.phase !== "main") {
+    throw new Error("Cannot trade in current phase");
+  }
+
+  if (state.currentPlayerId !== playerId) {
+    throw new Error("Not your turn");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  // 交換レートを決定（港の効果は後で実装、現在は4:1固定）
+  const tradeRatio = 4;
+
+  if (give.amount !== tradeRatio) {
+    throw new Error(`${tradeRatio}:1の交換レートです`);
+  }
+
+  // 資源が足りるか確認
+  if (player.resources[give.resource] < give.amount) {
+    throw new Error(`${give.resource}が足りません`);
+  }
+
+  // プレイヤーの資源を更新
+  const updatedPlayers = state.players.map((p) => {
+    if (p.id !== playerId) return p;
+
+    return {
+      ...p,
+      resources: {
+        ...p.resources,
+        [give.resource]: p.resources[give.resource] - give.amount,
+        [receive]: p.resources[receive] + 1,
+      },
+    };
+  });
+
+  return {
+    ...state,
+    players: updatedPlayers,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 // ============================================
 // アクションディスパッチャー
 // ============================================
@@ -1002,6 +1287,9 @@ export function processGameAction(
     case "build_settlement":
       return handleBuildSettlement(state, playerId, action.intersectionId);
 
+    case "build_city":
+      return handleBuildCity(state, playerId, action.intersectionId);
+
     case "build_road":
       return handleBuildRoad(state, playerId, action.edgeId);
 
@@ -1011,7 +1299,16 @@ export function processGameAction(
     case "move_robber":
       return handleMoveRobber(state, playerId, action.hexId);
 
-    // 他のアクションは後続の実装で追加
+    case "steal_resource":
+      return handleStealResource(state, playerId, action.targetPlayerId);
+
+    case "discard_resources":
+      return handleDiscardResources(state, playerId, action.resources);
+
+    case "trade_with_bank":
+      return handleTradeWithBank(state, playerId, action.give, action.receive);
+
+    // 発展カード・プレイヤー間交易は後続の実装で追加
     default:
       throw new Error(`Unknown action type: ${(action as GameAction).type}`);
   }
