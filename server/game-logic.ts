@@ -20,6 +20,7 @@ import type {
   EdgeCoordinate,
   DiceResult,
   PlayerResources,
+  DevelopmentCardType,
 } from "@/types/game";
 import {
   INITIAL_RESOURCES,
@@ -97,6 +98,39 @@ const STANDARD_HEX_COORDS: CubeCoordinate[] = [
 
 // ボード上の有効な六角形座標のセット（検証用）
 const VALID_HEX_IDS = new Set(STANDARD_HEX_COORDS.map(cubeToId));
+
+// 港の配置（頂点IDと港情報のペア）
+// カタン標準: 4つの3:1港、5つの2:1港（各資源1つ）
+const PORT_CONFIGURATIONS: {
+  vertexIds: string[];
+  port: { ratio: number; resourceType: HoldableResource | null };
+}[] = [
+  // 3:1 汎用港 (4箇所)
+  { vertexIds: ["0,-2,2_N", "1,-2,1_N"], port: { ratio: 3, resourceType: null } },
+  { vertexIds: ["-2,0,2_S", "-2,1,1_S"], port: { ratio: 3, resourceType: null } },
+  { vertexIds: ["2,0,-2_N", "2,-1,-1_N"], port: { ratio: 3, resourceType: null } },
+  { vertexIds: ["-1,2,-1_S", "0,2,-2_S"], port: { ratio: 3, resourceType: null } },
+  // 2:1 専門港 (5箇所)
+  { vertexIds: ["2,-2,0_N", "2,-2,0_S"], port: { ratio: 2, resourceType: "ore" } },
+  { vertexIds: ["-2,2,0_N", "-2,2,0_S"], port: { ratio: 2, resourceType: "wheat" } },
+  { vertexIds: ["1,1,-2_N", "0,1,-1_S"], port: { ratio: 2, resourceType: "sheep" } },
+  { vertexIds: ["-1,-1,2_N", "-1,-1,2_S"], port: { ratio: 2, resourceType: "wood" } },
+  { vertexIds: ["1,-1,0_S", "0,-1,1_N"], port: { ratio: 2, resourceType: "brick" } },
+];
+
+// 発展カードデッキの構成
+const DEVELOPMENT_CARD_DECK: DevelopmentCardType[] = [
+  // 騎士カード 14枚
+  ...Array(14).fill("knight"),
+  // 勝利点カード 5枚
+  ...Array(5).fill("victoryPoint"),
+  // 街道建設 2枚
+  ...Array(2).fill("roadBuilding"),
+  // 収穫 2枚
+  ...Array(2).fill("yearOfPlenty"),
+  // 独占 2枚
+  ...Array(2).fill("monopoly"),
+] as DevelopmentCardType[];
 
 // ============================================
 // ユーティリティ関数
@@ -333,22 +367,37 @@ function getHexEdges(hex: CubeCoordinate): EdgeCoordinate[] {
 }
 
 /**
+ * 港IDマップを生成
+ */
+function createPortMap(): Map<string, { ratio: number; resourceType: HoldableResource | null }> {
+  const portMap = new Map<string, { ratio: number; resourceType: HoldableResource | null }>();
+  for (const config of PORT_CONFIGURATIONS) {
+    for (const vertexId of config.vertexIds) {
+      portMap.set(vertexId, config.port);
+    }
+  }
+  return portMap;
+}
+
+/**
  * 頂点（Intersection）を生成
  * ボード上の有効な位置のみ含める（海に突き出た頂点を除外）
  */
 function generateIntersections(hexes: Hex[]): Intersection[] {
   const intersectionMap = new Map<string, Intersection>();
+  const portMap = createPortMap();
 
   for (const hex of hexes) {
     const vertices = getHexVertices(hex.coordinate);
     for (const vertex of vertices) {
       const id = vertexToId(vertex);
       if (!intersectionMap.has(id) && isValidIntersection(vertex)) {
+        const port = portMap.get(id) || null;
         intersectionMap.set(id, {
           id,
           coordinate: vertex,
           building: null,
-          port: null,
+          port,
         });
       }
     }
@@ -391,6 +440,7 @@ export function createInitialGameState(roomId: string): GameState {
   const hexes = generateHexes();
   const intersections = generateIntersections(hexes);
   const edges = generateEdges(hexes);
+  const developmentCardDeck = shuffle([...DEVELOPMENT_CARD_DECK]);
 
   return {
     id: roomId,
@@ -404,11 +454,46 @@ export function createInitialGameState(roomId: string): GameState {
     turnNumber: 0,
     diceResult: null,
     activeTradeOffer: null,
-    developmentCardDeckCount: 25,
+    developmentCardDeck,
+    developmentCardDeckCount: developmentCardDeck.length,
+    cardsBoughtThisTurn: [],
+    longestRoadPlayerId: null,
+    largestArmyPlayerId: null,
     winnerId: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * プレイヤーの最良の交換レートを取得
+ */
+function getBestTradeRatio(
+  state: GameState,
+  playerId: string,
+  resource: HoldableResource
+): number {
+  let bestRatio = 4; // デフォルト4:1
+
+  // プレイヤーの建物がある頂点の港を確認
+  for (const intersection of state.intersections) {
+    if (
+      intersection.building?.playerId === playerId &&
+      intersection.port
+    ) {
+      const port = intersection.port;
+      // 汎用港 (3:1)
+      if (port.resourceType === null && port.ratio < bestRatio) {
+        bestRatio = port.ratio;
+      }
+      // 専門港 (2:1) - 該当資源のみ
+      if (port.resourceType === resource && port.ratio < bestRatio) {
+        bestRatio = port.ratio;
+      }
+    }
+  }
+
+  return bestRatio;
 }
 
 /**
@@ -735,13 +820,18 @@ export function handleBuildSettlement(
     nextPhase = "setup_road_2";
   }
 
-  return {
+  let newState: GameState = {
     ...state,
     intersections: updatedIntersections,
     players: updatedPlayers,
     phase: nextPhase as GamePhase,
     updatedAt: new Date().toISOString(),
   };
+
+  // 勝利条件をチェック
+  newState = checkVictoryCondition(newState);
+
+  return newState;
 }
 
 /**
@@ -886,7 +976,7 @@ export function handleBuildRoad(
     }
   }
 
-  return {
+  let newState: GameState = {
     ...state,
     edges: updatedEdges,
     players: updatedPlayers,
@@ -894,6 +984,14 @@ export function handleBuildRoad(
     currentPlayerId: nextPlayerId,
     updatedAt: new Date().toISOString(),
   };
+
+  // 最長交易路を更新（初期配置フェーズ後も含む）
+  newState = updateLongestRoad(newState);
+
+  // 勝利条件をチェック
+  newState = checkVictoryCondition(newState);
+
+  return newState;
 }
 
 /**
@@ -923,6 +1021,7 @@ export function handleEndTurn(
     turnNumber: state.turnNumber + 1,
     diceResult: null,
     activeTradeOffer: null,
+    cardsBoughtThisTurn: [], // ターン終了時にリセット
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1132,12 +1231,17 @@ export function handleBuildCity(
     };
   });
 
-  return {
+  let newState: GameState = {
     ...state,
     intersections: updatedIntersections,
     players: updatedPlayers,
     updatedAt: new Date().toISOString(),
   };
+
+  // 勝利条件をチェック
+  newState = checkVictoryCondition(newState);
+
+  return newState;
 }
 
 /**
@@ -1232,8 +1336,8 @@ export function handleTradeWithBank(
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error("Player not found");
 
-  // 交換レートを決定（港の効果は後で実装、現在は4:1固定）
-  const tradeRatio = 4;
+  // 交換レートを決定（港の効果を反映）
+  const tradeRatio = getBestTradeRatio(state, playerId, give.resource);
 
   if (give.amount !== tradeRatio) {
     throw new Error(`${tradeRatio}:1の交換レートです`);
@@ -1263,6 +1367,403 @@ export function handleTradeWithBank(
     players: updatedPlayers,
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * 発展カードを購入
+ */
+export function handleBuyDevelopmentCard(
+  state: GameState,
+  playerId: string
+): GameState {
+  if (state.phase !== "main") {
+    throw new Error("Cannot buy cards in current phase");
+  }
+
+  if (state.currentPlayerId !== playerId) {
+    throw new Error("Not your turn");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  // デッキが空でないか確認
+  if (state.developmentCardDeck.length === 0) {
+    throw new Error("発展カードデッキが空です");
+  }
+
+  // コスト確認（wheat: 1, ore: 1, sheep: 1）
+  if (
+    player.resources.wheat < 1 ||
+    player.resources.ore < 1 ||
+    player.resources.sheep < 1
+  ) {
+    throw new Error("資源が足りません（小麦1、鉱石1、羊毛1が必要）");
+  }
+
+  // カードを引く
+  const [drawnCard, ...remainingDeck] = state.developmentCardDeck;
+  const cardId = `${playerId}_${Date.now()}_${drawnCard}`;
+
+  // プレイヤーを更新
+  const updatedPlayers = state.players.map((p) => {
+    if (p.id !== playerId) return p;
+
+    return {
+      ...p,
+      resources: {
+        ...p.resources,
+        wheat: p.resources.wheat - 1,
+        ore: p.resources.ore - 1,
+        sheep: p.resources.sheep - 1,
+      },
+      developmentCards: [...p.developmentCards, drawnCard],
+      // 勝利点カードは即座に加算
+      visibleVictoryPoints:
+        drawnCard === "victoryPoint"
+          ? p.visibleVictoryPoints + 1
+          : p.visibleVictoryPoints,
+    };
+  });
+
+  let newState: GameState = {
+    ...state,
+    players: updatedPlayers,
+    developmentCardDeck: remainingDeck,
+    developmentCardDeckCount: remainingDeck.length,
+    cardsBoughtThisTurn: [...state.cardsBoughtThisTurn, cardId],
+    updatedAt: new Date().toISOString(),
+  };
+
+  // 勝利点カードの場合、勝利条件をチェック
+  if (drawnCard === "victoryPoint") {
+    newState = checkVictoryCondition(newState);
+  }
+
+  return newState;
+}
+
+/**
+ * 発展カードを使用
+ */
+export function handleUseDevelopmentCard(
+  state: GameState,
+  playerId: string,
+  cardType: DevelopmentCardType,
+  params?: {
+    targetHexId?: string;
+    targetPlayerId?: string;
+    resources?: [HoldableResource, HoldableResource];
+    resource?: HoldableResource;
+    edgeIds?: [string, string];
+  }
+): GameState {
+  if (state.currentPlayerId !== playerId) {
+    throw new Error("Not your turn");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  // カードを持っているか確認
+  const cardIndex = player.developmentCards.indexOf(cardType);
+  if (cardIndex === -1) {
+    throw new Error("そのカードを持っていません");
+  }
+
+  // 勝利点カードは使用できない
+  if (cardType === "victoryPoint") {
+    throw new Error("勝利点カードは使用できません");
+  }
+
+  let updatedState = state;
+  let updatedPlayers = state.players;
+
+  switch (cardType) {
+    case "knight": {
+      // 騎士カード: 盗賊を移動して資源を奪う
+      updatedPlayers = state.players.map((p) => {
+        if (p.id !== playerId) return p;
+        const newCards = [...p.developmentCards];
+        newCards.splice(cardIndex, 1);
+        return {
+          ...p,
+          developmentCards: newCards,
+          knightsPlayed: p.knightsPlayed + 1,
+        };
+      });
+      updatedState = {
+        ...state,
+        players: updatedPlayers,
+        phase: "robber_move" as GamePhase,
+      };
+      // 最大騎士力を更新
+      updatedState = updateLargestArmy(updatedState);
+      break;
+    }
+
+    case "roadBuilding": {
+      // 街道建設: 2本の道を無料で建設（後でUIで処理）
+      updatedPlayers = state.players.map((p) => {
+        if (p.id !== playerId) return p;
+        const newCards = [...p.developmentCards];
+        newCards.splice(cardIndex, 1);
+        return { ...p, developmentCards: newCards };
+      });
+      // 実際の道建設は別途処理（簡易実装: 道2本分の資源を付与）
+      updatedPlayers = updatedPlayers.map((p) => {
+        if (p.id !== playerId) return p;
+        return {
+          ...p,
+          resources: {
+            ...p.resources,
+            wood: p.resources.wood + 2,
+            brick: p.resources.brick + 2,
+          },
+        };
+      });
+      updatedState = { ...state, players: updatedPlayers };
+      break;
+    }
+
+    case "yearOfPlenty": {
+      // 収穫: 任意の資源2つを獲得
+      if (!params?.resources || params.resources.length !== 2) {
+        throw new Error("獲得する資源を2つ指定してください");
+      }
+      updatedPlayers = state.players.map((p) => {
+        if (p.id !== playerId) return p;
+        const newCards = [...p.developmentCards];
+        newCards.splice(cardIndex, 1);
+        const newResources = { ...p.resources };
+        newResources[params.resources![0]] += 1;
+        newResources[params.resources![1]] += 1;
+        return { ...p, developmentCards: newCards, resources: newResources };
+      });
+      updatedState = { ...state, players: updatedPlayers };
+      break;
+    }
+
+    case "monopoly": {
+      // 独占: 指定した資源を全員から奪う
+      if (!params?.resource) {
+        throw new Error("独占する資源を指定してください");
+      }
+      const targetResource = params.resource;
+      let totalStolen = 0;
+
+      // 他プレイヤーから資源を集める
+      updatedPlayers = state.players.map((p) => {
+        if (p.id === playerId) return p;
+        const stolen = p.resources[targetResource];
+        totalStolen += stolen;
+        return {
+          ...p,
+          resources: { ...p.resources, [targetResource]: 0 },
+        };
+      });
+
+      // カードを使用したプレイヤーに資源を渡す
+      updatedPlayers = updatedPlayers.map((p) => {
+        if (p.id !== playerId) return p;
+        const newCards = [...p.developmentCards];
+        newCards.splice(cardIndex, 1);
+        return {
+          ...p,
+          developmentCards: newCards,
+          resources: {
+            ...p.resources,
+            [targetResource]: p.resources[targetResource] + totalStolen,
+          },
+        };
+      });
+      updatedState = { ...state, players: updatedPlayers };
+      break;
+    }
+  }
+
+  return {
+    ...updatedState,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * プレイヤーの道の長さを計算（DFS）
+ */
+function calculateRoadLength(
+  state: GameState,
+  playerId: string,
+  startEdgeId: string,
+  visited: Set<string>
+): number {
+  if (visited.has(startEdgeId)) return 0;
+
+  const edge = state.edges.find((e) => e.id === startEdgeId);
+  if (!edge || edge.road?.playerId !== playerId) return 0;
+
+  visited.add(startEdgeId);
+
+  const edgeCoord = parseEdgeId(startEdgeId);
+  if (!edgeCoord) return 1;
+
+  // 隣接する頂点を取得
+  const adjacentVertices = getAdjacentVerticesForEdge(edgeCoord);
+  let maxLength = 1;
+
+  for (const vertex of adjacentVertices) {
+    const vertexId = vertexToId(vertex);
+    const intersection = state.intersections.find((i) => i.id === vertexId);
+
+    // 他プレイヤーの建物があると道が途切れる
+    if (
+      intersection?.building &&
+      intersection.building.playerId !== playerId
+    ) {
+      continue;
+    }
+
+    // この頂点から伸びる他の道を探す
+    const adjacentEdges = getAdjacentEdgesForVertex(vertex);
+    for (const adjEdge of adjacentEdges) {
+      const adjEdgeId = edgeToId(adjEdge);
+      if (adjEdgeId !== startEdgeId) {
+        const length = 1 + calculateRoadLength(state, playerId, adjEdgeId, visited);
+        maxLength = Math.max(maxLength, length);
+      }
+    }
+  }
+
+  visited.delete(startEdgeId);
+  return maxLength;
+}
+
+/**
+ * プレイヤーの最長道路を計算
+ */
+function getLongestRoadForPlayer(state: GameState, playerId: string): number {
+  let longestRoad = 0;
+
+  // プレイヤーの全ての道から開始点を試す
+  for (const edge of state.edges) {
+    if (edge.road?.playerId === playerId) {
+      const length = calculateRoadLength(state, playerId, edge.id, new Set());
+      longestRoad = Math.max(longestRoad, length);
+    }
+  }
+
+  return longestRoad;
+}
+
+/**
+ * 最長交易路ボーナスを更新
+ */
+function updateLongestRoad(state: GameState): GameState {
+  let longestRoadPlayerId = state.longestRoadPlayerId;
+  let longestRoadLength = 0;
+
+  // 現在の保持者の道の長さ
+  if (longestRoadPlayerId) {
+    longestRoadLength = getLongestRoadForPlayer(state, longestRoadPlayerId);
+  }
+
+  // 各プレイヤーの道の長さを計算
+  for (const player of state.players) {
+    const roadLength = getLongestRoadForPlayer(state, player.id);
+
+    // 5以上で、現在の最長を超えた場合に更新
+    if (roadLength >= 5 && roadLength > longestRoadLength) {
+      longestRoadLength = roadLength;
+      longestRoadPlayerId = player.id;
+    }
+  }
+
+  // 保持者が変わった場合、勝利点を更新
+  if (longestRoadPlayerId !== state.longestRoadPlayerId) {
+    const updatedPlayers = state.players.map((p) => {
+      let vp = p.visibleVictoryPoints;
+      if (p.id === state.longestRoadPlayerId) {
+        vp -= 2; // 前の保持者から2点引く
+        return { ...p, hasLongestRoad: false, visibleVictoryPoints: vp };
+      }
+      if (p.id === longestRoadPlayerId) {
+        vp += 2; // 新しい保持者に2点加える
+        return { ...p, hasLongestRoad: true, visibleVictoryPoints: vp };
+      }
+      return p;
+    });
+
+    return {
+      ...state,
+      players: updatedPlayers,
+      longestRoadPlayerId,
+    };
+  }
+
+  return state;
+}
+
+/**
+ * 最大騎士力ボーナスを更新
+ */
+function updateLargestArmy(state: GameState): GameState {
+  let largestArmyPlayerId = state.largestArmyPlayerId;
+  let largestArmySize = 0;
+
+  // 現在の保持者の騎士数
+  if (largestArmyPlayerId) {
+    const holder = state.players.find((p) => p.id === largestArmyPlayerId);
+    largestArmySize = holder?.knightsPlayed || 0;
+  }
+
+  // 各プレイヤーの騎士数を確認
+  for (const player of state.players) {
+    // 3以上で、現在の最大を超えた場合に更新
+    if (player.knightsPlayed >= 3 && player.knightsPlayed > largestArmySize) {
+      largestArmySize = player.knightsPlayed;
+      largestArmyPlayerId = player.id;
+    }
+  }
+
+  // 保持者が変わった場合、勝利点を更新
+  if (largestArmyPlayerId !== state.largestArmyPlayerId) {
+    const updatedPlayers = state.players.map((p) => {
+      let vp = p.visibleVictoryPoints;
+      if (p.id === state.largestArmyPlayerId) {
+        vp -= 2;
+        return { ...p, hasLargestArmy: false, visibleVictoryPoints: vp };
+      }
+      if (p.id === largestArmyPlayerId) {
+        vp += 2;
+        return { ...p, hasLargestArmy: true, visibleVictoryPoints: vp };
+      }
+      return p;
+    });
+
+    return {
+      ...state,
+      players: updatedPlayers,
+      largestArmyPlayerId,
+    };
+  }
+
+  return state;
+}
+
+/**
+ * 勝利条件をチェック
+ */
+function checkVictoryCondition(state: GameState): GameState {
+  for (const player of state.players) {
+    if (player.visibleVictoryPoints >= 10) {
+      return {
+        ...state,
+        phase: "game_over",
+        winnerId: player.id,
+      };
+    }
+  }
+  return state;
 }
 
 // ============================================
@@ -1308,7 +1809,18 @@ export function processGameAction(
     case "trade_with_bank":
       return handleTradeWithBank(state, playerId, action.give, action.receive);
 
-    // 発展カード・プレイヤー間交易は後続の実装で追加
+    case "buy_development_card":
+      return handleBuyDevelopmentCard(state, playerId);
+
+    case "use_development_card":
+      return handleUseDevelopmentCard(
+        state,
+        playerId,
+        action.cardType,
+        action.params
+      );
+
+    // プレイヤー間交易は後続の実装で追加
     default:
       throw new Error(`Unknown action type: ${(action as GameAction).type}`);
   }

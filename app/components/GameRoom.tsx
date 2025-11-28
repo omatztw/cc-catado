@@ -11,10 +11,12 @@ import { GameBoard } from "./GameBoard";
 import type {
   GameState,
   GamePhase,
+  GameAction,
   Player,
   HoldableResource,
   ChatMessage,
   RoomInfo,
+  DevelopmentCardType,
 } from "@/types/game";
 
 // ============================================
@@ -35,6 +37,22 @@ const RESOURCE_ICONS: Record<HoldableResource, string> = {
   wheat: "🌾",
   ore: "⛏️",
   sheep: "🐑",
+};
+
+const DEV_CARD_LABELS: Record<DevelopmentCardType, string> = {
+  knight: "騎士",
+  victoryPoint: "勝利点",
+  roadBuilding: "街道建設",
+  yearOfPlenty: "収穫",
+  monopoly: "独占",
+};
+
+const DEV_CARD_ICONS: Record<DevelopmentCardType, string> = {
+  knight: "⚔️",
+  victoryPoint: "⭐",
+  roadBuilding: "🛤️",
+  yearOfPlenty: "🌽",
+  monopoly: "💰",
 };
 
 const PHASE_LABELS: Record<GamePhase, string> = {
@@ -557,6 +575,15 @@ function PlayerPanel({
     white: "bg-gray-50",
   }[player.color];
 
+  // 発展カードの枚数集計
+  const devCardCounts = useMemo(() => {
+    const counts: Partial<Record<DevelopmentCardType, number>> = {};
+    player.developmentCards.forEach((card) => {
+      counts[card] = (counts[card] || 0) + 1;
+    });
+    return counts;
+  }, [player.developmentCards]);
+
   return (
     <div
       className={`p-3 rounded-lg border-2 ${borderColor} ${bgColor} ${
@@ -573,9 +600,30 @@ function PlayerPanel({
         </span>
       </div>
 
+      {/* 特殊バッジ（最長交易路・最大騎士力） */}
+      <div className="flex gap-1 mb-2">
+        {player.hasLongestRoad && (
+          <span className="px-2 py-0.5 bg-green-100 text-green-800 text-xs rounded-full" title="最長交易路 (+2VP)">
+            🛤️ 最長交易路
+          </span>
+        )}
+        {player.hasLargestArmy && (
+          <span className="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full" title="最大騎士力 (+2VP)">
+            ⚔️ 最大騎士力
+          </span>
+        )}
+      </div>
+
+      {/* 騎士使用数 */}
+      {player.knightsPlayed > 0 && (
+        <div className="text-xs text-gray-600 mb-1">
+          騎士使用: {player.knightsPlayed}枚
+        </div>
+      )}
+
       {/* 資源（自分のみ表示） */}
       {isSelf && (
-        <div className="grid grid-cols-5 gap-1 text-xs">
+        <div className="grid grid-cols-5 gap-1 text-xs mb-2">
           {(Object.keys(player.resources) as HoldableResource[]).map(
             (resource) => (
               <div
@@ -589,6 +637,34 @@ function PlayerPanel({
             )
           )}
         </div>
+      )}
+
+      {/* 発展カード（自分のみ詳細表示、他者は枚数のみ） */}
+      {isSelf ? (
+        player.developmentCards.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-gray-200">
+            <div className="text-xs text-gray-600 mb-1">発展カード:</div>
+            <div className="flex flex-wrap gap-1">
+              {(Object.entries(devCardCounts) as [DevelopmentCardType, number][]).map(
+                ([card, count]) => (
+                  <span
+                    key={card}
+                    className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded"
+                    title={DEV_CARD_LABELS[card]}
+                  >
+                    {DEV_CARD_ICONS[card]} {DEV_CARD_LABELS[card]} ×{count}
+                  </span>
+                )
+              )}
+            </div>
+          </div>
+        )
+      ) : (
+        player.developmentCards.length > 0 && (
+          <div className="text-xs text-gray-600">
+            発展カード: {player.developmentCards.length}枚
+          </div>
+        )
       )}
 
       {/* 接続状態 */}
@@ -609,7 +685,7 @@ function ActionPanel({
 }: {
   gameState: GameState;
   playerId: string;
-  onAction: (action: { type: string; [key: string]: unknown }) => void;
+  onAction: (action: Omit<GameAction, "roomId">) => void;
 }) {
   const isMyTurn = gameState.currentPlayerId === playerId;
   const phase = gameState.phase;
@@ -633,33 +709,86 @@ function ActionPanel({
   const [tradeReceiveResource, setTradeReceiveResource] =
     useState<HoldableResource>("brick");
 
+  // 発展カード使用用のstate
+  const [showDevCardUse, setShowDevCardUse] = useState(false);
+  const [yearOfPlentyResources, setYearOfPlentyResources] = useState<
+    [HoldableResource, HoldableResource]
+  >(["wood", "brick"]);
+  const [monopolyResource, setMonopolyResource] =
+    useState<HoldableResource>("wood");
+
+  // 港による最良交換レートを計算
+  const getBestTradeRatio = useCallback(
+    (resource: HoldableResource): number => {
+      if (!currentPlayer) return 4;
+      let bestRatio = 4;
+
+      gameState.intersections.forEach((intersection) => {
+        if (
+          intersection.building?.playerId === playerId &&
+          intersection.port
+        ) {
+          const port = intersection.port;
+          // 汎用港
+          if (port.resourceType === null && port.ratio < bestRatio) {
+            bestRatio = port.ratio;
+          }
+          // 専門港
+          if (port.resourceType === resource && port.ratio < bestRatio) {
+            bestRatio = port.ratio;
+          }
+        }
+      });
+
+      return bestRatio;
+    },
+    [gameState.intersections, playerId, currentPlayer]
+  );
+
+  const tradeRatio = getBestTradeRatio(tradeGiveResource);
+
   const handleStartGame = () => {
-    onAction({ type: "start_game" });
+    onAction({ type: "start_game" } as Omit<GameAction, "roomId">);
   };
 
   const handleRollDice = () => {
-    onAction({ type: "roll_dice" });
+    onAction({ type: "roll_dice" } as Omit<GameAction, "roomId">);
   };
 
   const handleEndTurn = () => {
-    onAction({ type: "end_turn" });
+    onAction({ type: "end_turn" } as Omit<GameAction, "roomId">);
   };
 
   const handleStealResource = (targetPlayerId: string) => {
-    onAction({ type: "steal_resource", targetPlayerId });
+    onAction({ type: "steal_resource", targetPlayerId } as Omit<GameAction, "roomId">);
   };
 
   const handleDiscardResources = () => {
-    onAction({ type: "discard_resources", resources: discardResources });
+    onAction({ type: "discard_resources", resources: discardResources } as Omit<GameAction, "roomId">);
   };
 
   const handleBankTrade = () => {
     onAction({
       type: "trade_with_bank",
-      give: { resource: tradeGiveResource, amount: 4 },
+      give: { resource: tradeGiveResource, amount: tradeRatio },
       receive: tradeReceiveResource,
-    });
+    } as Omit<GameAction, "roomId">);
     setShowBankTrade(false);
+  };
+
+  const handleBuyDevCard = () => {
+    onAction({ type: "buy_development_card" } as Omit<GameAction, "roomId">);
+  };
+
+  const handleUseDevCard = (
+    cardType: DevelopmentCardType,
+    params?: {
+      resources?: [HoldableResource, HoldableResource];
+      resource?: HoldableResource;
+    }
+  ) => {
+    onAction({ type: "use_development_card", cardType, params } as Omit<GameAction, "roomId">);
+    setShowDevCardUse(false);
   };
 
   // 破棄に必要な枚数を計算
@@ -782,13 +911,154 @@ function ActionPanel({
               建設: ボード上でクリック
             </p>
 
+            {/* 発展カード購入 */}
+            <button
+              onClick={handleBuyDevCard}
+              disabled={
+                !currentPlayer ||
+                currentPlayer.resources.wheat < 1 ||
+                currentPlayer.resources.ore < 1 ||
+                currentPlayer.resources.sheep < 1 ||
+                gameState.developmentCardDeckCount === 0
+              }
+              className="w-full py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:bg-gray-400 transition"
+            >
+              発展カード購入 (小麦1,鉱石1,羊1) 残{gameState.developmentCardDeckCount}枚
+            </button>
+
+            {/* 発展カード使用 */}
+            {currentPlayer && currentPlayer.developmentCards.length > 0 && (
+              <>
+                {!showDevCardUse ? (
+                  <button
+                    onClick={() => setShowDevCardUse(true)}
+                    className="w-full py-2 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 transition"
+                  >
+                    発展カードを使用
+                  </button>
+                ) : (
+                  <div className="bg-indigo-50 p-3 rounded-lg space-y-2">
+                    <div className="text-sm font-medium text-gray-700">使用するカード:</div>
+
+                    {/* 騎士カード */}
+                    {currentPlayer.developmentCards.includes("knight") && (
+                      <button
+                        onClick={() => handleUseDevCard("knight")}
+                        className="w-full py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 transition"
+                      >
+                        ⚔️ 騎士（盗賊を移動）
+                      </button>
+                    )}
+
+                    {/* 街道建設 */}
+                    {currentPlayer.developmentCards.includes("roadBuilding") && (
+                      <button
+                        onClick={() => handleUseDevCard("roadBuilding")}
+                        className="w-full py-1 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 transition"
+                      >
+                        🛤️ 街道建設（道2本分の資源）
+                      </button>
+                    )}
+
+                    {/* 収穫 */}
+                    {currentPlayer.developmentCards.includes("yearOfPlenty") && (
+                      <div className="space-y-1">
+                        <div className="text-xs">🌽 収穫（資源2つ獲得）:</div>
+                        <div className="flex gap-1">
+                          <select
+                            value={yearOfPlentyResources[0]}
+                            onChange={(e) =>
+                              setYearOfPlentyResources([
+                                e.target.value as HoldableResource,
+                                yearOfPlentyResources[1],
+                              ])
+                            }
+                            className="flex-1 px-1 py-1 border rounded text-xs"
+                          >
+                            {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map((r) => (
+                              <option key={r} value={r}>
+                                {RESOURCE_ICONS[r]}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={yearOfPlentyResources[1]}
+                            onChange={(e) =>
+                              setYearOfPlentyResources([
+                                yearOfPlentyResources[0],
+                                e.target.value as HoldableResource,
+                              ])
+                            }
+                            className="flex-1 px-1 py-1 border rounded text-xs"
+                          >
+                            {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map((r) => (
+                              <option key={r} value={r}>
+                                {RESOURCE_ICONS[r]}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() =>
+                              handleUseDevCard("yearOfPlenty", {
+                                resources: yearOfPlentyResources,
+                              })
+                            }
+                            className="px-2 py-1 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700 transition"
+                          >
+                            使用
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 独占 */}
+                    {currentPlayer.developmentCards.includes("monopoly") && (
+                      <div className="space-y-1">
+                        <div className="text-xs">💰 独占（全員からその資源を奪う）:</div>
+                        <div className="flex gap-1">
+                          <select
+                            value={monopolyResource}
+                            onChange={(e) =>
+                              setMonopolyResource(e.target.value as HoldableResource)
+                            }
+                            className="flex-1 px-1 py-1 border rounded text-xs"
+                          >
+                            {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map((r) => (
+                              <option key={r} value={r}>
+                                {RESOURCE_ICONS[r]} {RESOURCE_LABELS[r]}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() =>
+                              handleUseDevCard("monopoly", { resource: monopolyResource })
+                            }
+                            className="px-2 py-1 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700 transition"
+                          >
+                            使用
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => setShowDevCardUse(false)}
+                      className="w-full py-1 bg-gray-300 text-gray-700 rounded text-sm hover:bg-gray-400 transition"
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
             {/* 銀行交易 */}
             {!showBankTrade ? (
               <button
                 onClick={() => setShowBankTrade(true)}
                 className="w-full py-2 bg-yellow-600 text-white rounded-lg font-semibold hover:bg-yellow-700 transition"
               >
-                銀行と交易 (4:1)
+                銀行と交易
               </button>
             ) : (
               <div className="bg-yellow-50 p-3 rounded-lg space-y-2">
@@ -810,7 +1080,7 @@ function ActionPanel({
                       )
                     )}
                   </select>
-                  <span className="text-sm">×4</span>
+                  <span className="text-sm">×{tradeRatio}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-sm">受取:</span>
@@ -831,12 +1101,17 @@ function ActionPanel({
                   </select>
                   <span className="text-sm">×1</span>
                 </div>
+                {tradeRatio < 4 && (
+                  <p className="text-xs text-green-600">
+                    港ボーナス適用中 ({tradeRatio}:1)
+                  </p>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={handleBankTrade}
                     disabled={
                       !currentPlayer ||
-                      currentPlayer.resources[tradeGiveResource] < 4
+                      currentPlayer.resources[tradeGiveResource] < tradeRatio
                     }
                     className="flex-1 py-1 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700 disabled:bg-gray-400 transition"
                   >
@@ -966,7 +1241,7 @@ function ActionPanel({
         )}
 
         {/* 他のプレイヤーのターン */}
-        {!isMyTurn && phase !== "waiting" && phase !== "game_over" && phase !== "discard" && (
+        {!isMyTurn && phase !== "discard" && (
           <p className="text-sm text-gray-500 text-center">
             {
               gameState.players.find(
@@ -1153,17 +1428,17 @@ export function GameRoom() {
         phase === "setup_settlement_1" ||
         phase === "setup_settlement_2"
       ) {
-        sendAction({ type: "build_settlement", intersectionId });
+        sendAction({ type: "build_settlement", intersectionId } as Omit<GameAction, "roomId">);
       } else if (phase === "main") {
         // 自分の開拓地をクリックしたら都市化
         if (
           intersection?.building?.playerId === playerId &&
           intersection.building.type === "settlement"
         ) {
-          sendAction({ type: "build_city", intersectionId });
+          sendAction({ type: "build_city", intersectionId } as Omit<GameAction, "roomId">);
         } else {
           // 空の頂点なら開拓地建設
-          sendAction({ type: "build_settlement", intersectionId });
+          sendAction({ type: "build_settlement", intersectionId } as Omit<GameAction, "roomId">);
         }
       }
     },
@@ -1180,7 +1455,7 @@ export function GameRoom() {
         phase === "setup_road_2" ||
         phase === "main"
       ) {
-        sendAction({ type: "build_road", edgeId });
+        sendAction({ type: "build_road", edgeId } as Omit<GameAction, "roomId">);
       }
     },
     [gameState, playerId, sendAction]
@@ -1191,7 +1466,7 @@ export function GameRoom() {
       if (!gameState || !playerId) return;
 
       if (gameState.phase === "robber_move") {
-        sendAction({ type: "move_robber", hexId });
+        sendAction({ type: "move_robber", hexId } as Omit<GameAction, "roomId">);
       }
     },
     [gameState, playerId, sendAction]

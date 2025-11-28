@@ -245,8 +245,16 @@ export interface GameState {
   diceResult: DiceResult | null;
   // 進行中の交易提案
   activeTradeOffer: TradeOffer | null;
+  // 発展カードデッキ（シャッフル済み）
+  developmentCardDeck: DevelopmentCardType[];
   // 残り発展カードデッキ枚数
   developmentCardDeckCount: number;
+  // このターンに購入したカード（使用不可）
+  cardsBoughtThisTurn: string[];
+  // 最長交易路保持者のプレイヤーID
+  longestRoadPlayerId: string | null;
+  // 最大騎士力保持者のプレイヤーID
+  largestArmyPlayerId: string | null;
   // 勝者（ゲーム終了時のみ）
   winnerId: string | null;
   // 作成日時
