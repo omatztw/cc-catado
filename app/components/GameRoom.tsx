@@ -717,6 +717,15 @@ function ActionPanel({
   const [monopolyResource, setMonopolyResource] =
     useState<HoldableResource>("wood");
 
+  // プレイヤー間交易用のstate
+  const [showPlayerTrade, setShowPlayerTrade] = useState(false);
+  const [tradeOffering, setTradeOffering] = useState<Record<HoldableResource, number>>({
+    wood: 0, brick: 0, wheat: 0, ore: 0, sheep: 0,
+  });
+  const [tradeRequesting, setTradeRequesting] = useState<Record<HoldableResource, number>>({
+    wood: 0, brick: 0, wheat: 0, ore: 0, sheep: 0,
+  });
+
   // 港による最良交換レートを計算
   const getBestTradeRatio = useCallback(
     (resource: HoldableResource): number => {
@@ -789,6 +798,34 @@ function ActionPanel({
   ) => {
     onAction({ type: "use_development_card", cardType, params } as Omit<GameAction, "roomId">);
     setShowDevCardUse(false);
+  };
+
+  const handleProposeTrade = () => {
+    const offering: Partial<Record<HoldableResource, number>> = {};
+    const requesting: Partial<Record<HoldableResource, number>> = {};
+
+    for (const [resource, amount] of Object.entries(tradeOffering)) {
+      if (amount > 0) offering[resource as HoldableResource] = amount;
+    }
+    for (const [resource, amount] of Object.entries(tradeRequesting)) {
+      if (amount > 0) requesting[resource as HoldableResource] = amount;
+    }
+
+    onAction({ type: "propose_trade", offering, requesting } as Omit<GameAction, "roomId">);
+    setShowPlayerTrade(false);
+    // リセット
+    setTradeOffering({ wood: 0, brick: 0, wheat: 0, ore: 0, sheep: 0 });
+    setTradeRequesting({ wood: 0, brick: 0, wheat: 0, ore: 0, sheep: 0 });
+  };
+
+  const handleRespondTrade = (response: "accept" | "reject") => {
+    if (gameState.activeTradeOffer) {
+      onAction({
+        type: "respond_to_trade",
+        tradeId: gameState.activeTradeOffer.id,
+        response,
+      } as Omit<GameAction, "roomId">);
+    }
   };
 
   // 破棄に必要な枚数を計算
@@ -1127,6 +1164,98 @@ function ActionPanel({
               </div>
             )}
 
+            {/* プレイヤー間交易 */}
+            {!showPlayerTrade ? (
+              <button
+                onClick={() => setShowPlayerTrade(true)}
+                className="w-full py-2 bg-teal-600 text-white rounded-lg font-semibold hover:bg-teal-700 transition"
+              >
+                他プレイヤーと交易
+              </button>
+            ) : (
+              <div className="bg-teal-50 p-3 rounded-lg space-y-2">
+                <div className="text-sm font-medium text-gray-700 mb-2">プレイヤー間交易</div>
+
+                {/* 提供する資源 */}
+                <div className="text-xs text-gray-600">あげる:</div>
+                <div className="grid grid-cols-5 gap-1">
+                  {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map((r) => (
+                    <div key={`offer-${r}`} className="text-center">
+                      <div className="text-sm">{RESOURCE_ICONS[r]}</div>
+                      <div className="text-xs text-gray-500">{currentPlayer?.resources[r] || 0}</div>
+                      <div className="flex items-center justify-center gap-0.5">
+                        <button
+                          onClick={() => setTradeOffering(prev => ({
+                            ...prev,
+                            [r]: Math.max(0, prev[r] - 1)
+                          }))}
+                          className="w-4 h-4 bg-gray-200 rounded text-xs"
+                        >-</button>
+                        <span className="text-xs w-3">{tradeOffering[r]}</span>
+                        <button
+                          onClick={() => setTradeOffering(prev => ({
+                            ...prev,
+                            [r]: Math.min(currentPlayer?.resources[r] || 0, prev[r] + 1)
+                          }))}
+                          className="w-4 h-4 bg-gray-200 rounded text-xs"
+                        >+</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 要求する資源 */}
+                <div className="text-xs text-gray-600 mt-2">もらう:</div>
+                <div className="grid grid-cols-5 gap-1">
+                  {(Object.keys(RESOURCE_LABELS) as HoldableResource[]).map((r) => (
+                    <div key={`req-${r}`} className="text-center">
+                      <div className="text-sm">{RESOURCE_ICONS[r]}</div>
+                      <div className="flex items-center justify-center gap-0.5">
+                        <button
+                          onClick={() => setTradeRequesting(prev => ({
+                            ...prev,
+                            [r]: Math.max(0, prev[r] - 1)
+                          }))}
+                          className="w-4 h-4 bg-gray-200 rounded text-xs"
+                        >-</button>
+                        <span className="text-xs w-3">{tradeRequesting[r]}</span>
+                        <button
+                          onClick={() => setTradeRequesting(prev => ({
+                            ...prev,
+                            [r]: prev[r] + 1
+                          }))}
+                          className="w-4 h-4 bg-gray-200 rounded text-xs"
+                        >+</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={handleProposeTrade}
+                    disabled={
+                      Object.values(tradeOffering).reduce((a, b) => a + b, 0) === 0 ||
+                      Object.values(tradeRequesting).reduce((a, b) => a + b, 0) === 0
+                    }
+                    className="flex-1 py-1 bg-teal-600 text-white rounded text-sm hover:bg-teal-700 disabled:bg-gray-400 transition"
+                  >
+                    提案する
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowPlayerTrade(false);
+                      setTradeOffering({ wood: 0, brick: 0, wheat: 0, ore: 0, sheep: 0 });
+                      setTradeRequesting({ wood: 0, brick: 0, wheat: 0, ore: 0, sheep: 0 });
+                    }}
+                    className="px-3 py-1 bg-gray-300 rounded text-sm hover:bg-gray-400 transition"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={handleEndTurn}
               className="w-full py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition"
@@ -1240,8 +1369,90 @@ function ActionPanel({
           </div>
         )}
 
+        {/* 交易提案フェーズ */}
+        {phase === "trade_offer" && gameState.activeTradeOffer && (
+          <div className="space-y-2 bg-teal-50 p-3 rounded-lg">
+            <p className="text-sm font-medium text-gray-700">
+              交易提案: {gameState.players.find(p => p.id === gameState.activeTradeOffer?.fromPlayerId)?.name}
+            </p>
+
+            {/* 提案内容 */}
+            <div className="text-xs">
+              <div className="flex items-center gap-1 mb-1">
+                <span className="text-gray-600">あげる:</span>
+                {Object.entries(gameState.activeTradeOffer.offering).map(([r, amount]) =>
+                  amount ? (
+                    <span key={r} className="bg-white px-1 rounded">
+                      {RESOURCE_ICONS[r as HoldableResource]} ×{amount}
+                    </span>
+                  ) : null
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-gray-600">もらう:</span>
+                {Object.entries(gameState.activeTradeOffer.requesting).map(([r, amount]) =>
+                  amount ? (
+                    <span key={r} className="bg-white px-1 rounded">
+                      {RESOURCE_ICONS[r as HoldableResource]} ×{amount}
+                    </span>
+                  ) : null
+                )}
+              </div>
+            </div>
+
+            {/* 応答状況 */}
+            <div className="text-xs text-gray-500">
+              {Object.entries(gameState.activeTradeOffer.responses).map(([pid, status]) => {
+                const responder = gameState.players.find(p => p.id === pid);
+                return (
+                  <div key={pid}>
+                    {responder?.name}: {
+                      status === "pending" ? "検討中..." :
+                      status === "accepted" ? "受諾" : "拒否"
+                    }
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 提案者用: キャンセルボタン */}
+            {playerId === gameState.activeTradeOffer.fromPlayerId ? (
+              <button
+                onClick={() => handleRespondTrade("reject")}
+                className="w-full py-2 bg-gray-500 text-white rounded-lg font-semibold hover:bg-gray-600 transition"
+              >
+                提案をキャンセル
+              </button>
+            ) : (
+              /* 他プレイヤー用: 受諾/拒否ボタン */
+              gameState.activeTradeOffer.responses[playerId] === "pending" && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleRespondTrade("accept")}
+                    disabled={
+                      !currentPlayer ||
+                      Object.entries(gameState.activeTradeOffer!.requesting).some(
+                        ([r, amount]) => amount && currentPlayer.resources[r as HoldableResource] < amount
+                      )
+                    }
+                    className="flex-1 py-2 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 disabled:bg-gray-400 transition"
+                  >
+                    受諾
+                  </button>
+                  <button
+                    onClick={() => handleRespondTrade("reject")}
+                    className="flex-1 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition"
+                  >
+                    拒否
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        )}
+
         {/* 他のプレイヤーのターン */}
-        {!isMyTurn && phase !== "discard" && (
+        {!isMyTurn && phase !== "discard" && phase !== "trade_offer" && (
           <p className="text-sm text-gray-500 text-center">
             {
               gameState.players.find(

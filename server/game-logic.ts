@@ -21,6 +21,7 @@ import type {
   DiceResult,
   PlayerResources,
   DevelopmentCardType,
+  TradeOffer,
 } from "@/types/game";
 import {
   INITIAL_RESOURCES,
@@ -1751,6 +1752,189 @@ function updateLargestArmy(state: GameState): GameState {
 }
 
 /**
+ * 交易を提案
+ */
+export function handleProposeTrade(
+  state: GameState,
+  playerId: string,
+  offering: Partial<Record<HoldableResource, number>>,
+  requesting: Partial<Record<HoldableResource, number>>
+): GameState {
+  if (state.phase !== "main") {
+    throw new Error("メインフェーズでのみ交易を提案できます");
+  }
+
+  if (state.currentPlayerId !== playerId) {
+    throw new Error("自分のターンでのみ交易を提案できます");
+  }
+
+  if (state.activeTradeOffer) {
+    throw new Error("既に交易提案が進行中です");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  // 提供する資源を持っているか確認
+  for (const [resource, amount] of Object.entries(offering)) {
+    if (amount && player.resources[resource as HoldableResource] < amount) {
+      throw new Error(`${resource}が足りません`);
+    }
+  }
+
+  // 空の提案は無効
+  const totalOffering = Object.values(offering).reduce((sum, v) => sum + (v || 0), 0);
+  const totalRequesting = Object.values(requesting).reduce((sum, v) => sum + (v || 0), 0);
+  if (totalOffering === 0 || totalRequesting === 0) {
+    throw new Error("提供と要求の両方を指定してください");
+  }
+
+  // 交易提案を作成
+  const tradeOffer: TradeOffer = {
+    id: `trade_${Date.now()}`,
+    fromPlayerId: playerId,
+    offering,
+    requesting,
+    responses: {},
+  };
+
+  // 他のプレイヤーの応答を pending に初期化
+  for (const p of state.players) {
+    if (p.id !== playerId) {
+      tradeOffer.responses[p.id] = "pending";
+    }
+  }
+
+  return {
+    ...state,
+    activeTradeOffer: tradeOffer,
+    phase: "trade_offer",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 交易に応答
+ */
+export function handleRespondToTrade(
+  state: GameState,
+  playerId: string,
+  tradeId: string,
+  response: "accept" | "reject"
+): GameState {
+  if (state.phase !== "trade_offer") {
+    throw new Error("交易提案中ではありません");
+  }
+
+  const tradeOffer = state.activeTradeOffer;
+  if (!tradeOffer) {
+    throw new Error("交易提案がありません");
+  }
+
+  if (tradeOffer.id !== tradeId) {
+    throw new Error("交易提案IDが一致しません");
+  }
+
+  if (playerId === tradeOffer.fromPlayerId) {
+    // 提案者がキャンセル
+    if (response === "reject") {
+      return {
+        ...state,
+        activeTradeOffer: null,
+        phase: "main",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    throw new Error("提案者は自分の提案を受諾できません");
+  }
+
+  const responder = state.players.find((p) => p.id === playerId);
+  if (!responder) throw new Error("Player not found");
+
+  if (tradeOffer.responses[playerId] !== "pending") {
+    throw new Error("既に応答済みです");
+  }
+
+  // 応答を記録
+  const updatedResponses = {
+    ...tradeOffer.responses,
+    [playerId]: response,
+  };
+
+  // 受諾の場合、交易を実行
+  if (response === "accept") {
+    // 受諾者が要求資源を持っているか確認
+    for (const [resource, amount] of Object.entries(tradeOffer.requesting)) {
+      if (amount && responder.resources[resource as HoldableResource] < amount) {
+        throw new Error(`${resource}が足りません`);
+      }
+    }
+
+    // 資源を交換
+    const proposer = state.players.find((p) => p.id === tradeOffer.fromPlayerId);
+    if (!proposer) throw new Error("Proposer not found");
+
+    const updatedPlayers = state.players.map((p) => {
+      if (p.id === tradeOffer.fromPlayerId) {
+        // 提案者: offering を減らし、requesting を増やす
+        const newResources = { ...p.resources };
+        for (const [resource, amount] of Object.entries(tradeOffer.offering)) {
+          if (amount) newResources[resource as HoldableResource] -= amount;
+        }
+        for (const [resource, amount] of Object.entries(tradeOffer.requesting)) {
+          if (amount) newResources[resource as HoldableResource] += amount;
+        }
+        return { ...p, resources: newResources };
+      }
+      if (p.id === playerId) {
+        // 受諾者: requesting を減らし、offering を増やす
+        const newResources = { ...p.resources };
+        for (const [resource, amount] of Object.entries(tradeOffer.requesting)) {
+          if (amount) newResources[resource as HoldableResource] -= amount;
+        }
+        for (const [resource, amount] of Object.entries(tradeOffer.offering)) {
+          if (amount) newResources[resource as HoldableResource] += amount;
+        }
+        return { ...p, resources: newResources };
+      }
+      return p;
+    });
+
+    return {
+      ...state,
+      players: updatedPlayers,
+      activeTradeOffer: null,
+      phase: "main",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  // 拒否の場合、全員が拒否したらメインフェーズに戻る
+  const allRejected = Object.entries(updatedResponses).every(
+    ([pid, resp]) => resp === "rejected"
+  );
+
+  if (allRejected) {
+    return {
+      ...state,
+      activeTradeOffer: null,
+      phase: "main",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  // 応答を更新
+  return {
+    ...state,
+    activeTradeOffer: {
+      ...tradeOffer,
+      responses: updatedResponses,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
  * 勝利条件をチェック
  */
 function checkVictoryCondition(state: GameState): GameState {
@@ -1820,7 +2004,22 @@ export function processGameAction(
         action.params
       );
 
-    // プレイヤー間交易は後続の実装で追加
+    case "propose_trade":
+      return handleProposeTrade(
+        state,
+        playerId,
+        action.offering,
+        action.requesting
+      );
+
+    case "respond_to_trade":
+      return handleRespondToTrade(
+        state,
+        playerId,
+        action.tradeId,
+        action.response
+      );
+
     default:
       throw new Error(`Unknown action type: ${(action as GameAction).type}`);
   }
