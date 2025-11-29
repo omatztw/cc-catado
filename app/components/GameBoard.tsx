@@ -40,6 +40,16 @@ const RESOURCE_COLORS: Record<ResourceType, string> = {
   desert: "#F5DEB3",
 };
 
+// 港の資源アイコン
+const PORT_ICONS: Record<string, string> = {
+  wood: "🌲",
+  brick: "🧱",
+  wheat: "🌾",
+  ore: "⛏️",
+  sheep: "🐑",
+  any: "?",
+};
+
 // プレイヤー色のマッピング
 const PLAYER_COLORS: Record<string, string> = {
   red: "#DC2626",
@@ -187,6 +197,73 @@ function HexTile({
           </text>
         </g>
       )}
+    </g>
+  );
+}
+
+/**
+ * 港マーカーコンポーネント
+ */
+function PortMarker({
+  intersection,
+}: {
+  intersection: Intersection;
+}) {
+  if (!intersection.port) return null;
+
+  const { x, y } = getVertexPixel(
+    intersection.coordinate.hex,
+    intersection.coordinate.direction
+  );
+
+  // 港をボードの外側に向かってオフセット
+  // 中心からの方向を計算
+  const dx = x - BOARD_CENTER_X;
+  const dy = y - BOARD_CENTER_Y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  const offsetX = (dx / distance) * 30;
+  const offsetY = (dy / distance) * 30;
+
+  const portX = x + offsetX;
+  const portY = y + offsetY;
+
+  const isSpecialPort = intersection.port.resourceType !== null;
+  const icon = isSpecialPort
+    ? PORT_ICONS[intersection.port.resourceType!]
+    : PORT_ICONS.any;
+  const ratio = intersection.port.ratio;
+
+  return (
+    <g>
+      {/* 港の背景 */}
+      <circle
+        cx={portX}
+        cy={portY}
+        r={16}
+        fill={isSpecialPort ? "#FEF3C7" : "#E5E7EB"}
+        stroke="#4A5568"
+        strokeWidth="1"
+      />
+      {/* 比率 */}
+      <text
+        x={portX}
+        y={portY - 3}
+        textAnchor="middle"
+        fontSize="8"
+        fontWeight="bold"
+        fill="#1F2937"
+      >
+        {ratio}:1
+      </text>
+      {/* アイコン */}
+      <text
+        x={portX}
+        y={portY + 9}
+        textAnchor="middle"
+        fontSize="10"
+      >
+        {icon}
+      </text>
     </g>
   );
 }
@@ -378,6 +455,18 @@ export function GameBoard({
       >
         {/* 背景（海） */}
         <rect width="100%" height="100%" fill="#4169E1" />
+
+        {/* 港 */}
+        <g id="ports">
+          {gameState.intersections
+            .filter((i) => i.port)
+            .map((intersection) => (
+              <PortMarker
+                key={`port-${intersection.id}`}
+                intersection={intersection}
+              />
+            ))}
+        </g>
 
         {/* 六角形タイル */}
         <g id="hexes">
