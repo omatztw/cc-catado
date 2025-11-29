@@ -102,22 +102,23 @@ const VALID_HEX_IDS = new Set(STANDARD_HEX_COORDS.map(cubeToId));
 
 // 港の配置（頂点IDと港情報のペア）
 // カタン標準: 4つの3:1港、5つの2:1港（各資源1つ）
+// 各港は隣接する2つの海岸頂点を指定（頂点は実際に辺で繋がっている必要あり）
 const PORT_CONFIGURATIONS: {
   portId: string;
   vertexIds: string[];
   port: { ratio: number; resourceType: HoldableResource | null };
 }[] = [
-  // 3:1 汎用港 (4箇所)
-  { portId: "port-1", vertexIds: ["0,-2,2_N", "1,-2,1_N"], port: { ratio: 3, resourceType: null } },
-  { portId: "port-2", vertexIds: ["-2,0,2_S", "-2,1,1_S"], port: { ratio: 3, resourceType: null } },
-  { portId: "port-3", vertexIds: ["2,0,-2_N", "2,-1,-1_N"], port: { ratio: 3, resourceType: null } },
-  { portId: "port-4", vertexIds: ["-1,2,-1_S", "0,2,-2_S"], port: { ratio: 3, resourceType: null } },
+  // 3:1 汎用港 (4箇所) - 時計回りに配置
+  { portId: "port-1", vertexIds: ["0,-2,2_N", "0,-3,3_S"], port: { ratio: 3, resourceType: null } },      // 上側
+  { portId: "port-2", vertexIds: ["2,-2,0_N", "3,-3,0_S"], port: { ratio: 3, resourceType: null } },      // 右上
+  { portId: "port-3", vertexIds: ["2,0,-2_S", "2,1,-3_N"], port: { ratio: 3, resourceType: null } },      // 右下
+  { portId: "port-4", vertexIds: ["0,2,-2_S", "-1,3,-2_N"], port: { ratio: 3, resourceType: null } },     // 下側
   // 2:1 専門港 (5箇所)
-  { portId: "port-ore", vertexIds: ["2,-2,0_N", "2,-2,0_S"], port: { ratio: 2, resourceType: "ore" } },
-  { portId: "port-wheat", vertexIds: ["-2,2,0_N", "-2,2,0_S"], port: { ratio: 2, resourceType: "wheat" } },
-  { portId: "port-sheep", vertexIds: ["1,1,-2_N", "0,1,-1_S"], port: { ratio: 2, resourceType: "sheep" } },
-  { portId: "port-wood", vertexIds: ["-1,-1,2_N", "-1,-1,2_S"], port: { ratio: 2, resourceType: "wood" } },
-  { portId: "port-brick", vertexIds: ["1,-1,0_S", "0,-1,1_N"], port: { ratio: 2, resourceType: "brick" } },
+  { portId: "port-ore", vertexIds: ["1,-2,1_N", "2,-3,1_S"], port: { ratio: 2, resourceType: "ore" } },   // 上右
+  { portId: "port-wheat", vertexIds: ["-2,2,0_S", "-3,3,0_N"], port: { ratio: 2, resourceType: "wheat" } }, // 左下
+  { portId: "port-sheep", vertexIds: ["1,1,-2_S", "1,2,-3_N"], port: { ratio: 2, resourceType: "sheep" } }, // 右下寄り
+  { portId: "port-wood", vertexIds: ["-1,-1,2_N", "-1,-2,3_S"], port: { ratio: 2, resourceType: "wood" } }, // 左上
+  { portId: "port-brick", vertexIds: ["-2,0,2_S", "-3,1,2_N"], port: { ratio: 2, resourceType: "brick" } }, // 左側
 ];
 
 // 発展カードデッキの構成
