@@ -1967,8 +1967,27 @@ export function GameRoom() {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <h1 className="text-xl font-bold">カタド</h1>
           <div className="flex items-center gap-4">
-            <span className="text-sm opacity-80">
+            <span className="text-sm opacity-80 flex items-center gap-1">
               ルーム: {gameState.id}
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(gameState.id).then(() => {
+                    // 短時間のフィードバック表示用にボタンテキストを変更
+                    const btn = document.getElementById('copy-room-id-btn');
+                    if (btn) {
+                      btn.textContent = '✓';
+                      setTimeout(() => {
+                        btn.textContent = '📋';
+                      }, 1500);
+                    }
+                  });
+                }}
+                id="copy-room-id-btn"
+                className="ml-1 px-1 py-0.5 text-xs bg-blue-700 hover:bg-blue-600 rounded transition"
+                title="ルームIDをコピー"
+              >
+                📋
+              </button>
             </span>
             {/* 設定ボタン */}
             <div className="flex items-center gap-2">
