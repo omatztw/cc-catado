@@ -450,6 +450,7 @@ interface GameBoardProps {
   selectableHexes?: string[];
   selectableIntersections?: string[];
   selectableEdges?: string[];
+  debug?: boolean; // デバッグモード：頂点座標を表示
 }
 
 export function GameBoard({
@@ -461,6 +462,7 @@ export function GameBoard({
   selectableHexes = [],
   selectableIntersections = [],
   selectableEdges = [],
+  debug = false,
 }: GameBoardProps) {
   // セレクタブルなIDをSetに変換（パフォーマンス向上）
   const selectableHexSet = useMemo(
@@ -552,6 +554,46 @@ export function GameBoard({
             />
           ))}
         </g>
+
+        {/* デバッグ: 頂点座標表示 */}
+        {debug && (
+          <g id="debug-labels">
+            {gameState.intersections.map((intersection) => {
+              const { x, y } = getVertexPixel(
+                intersection.coordinate.hex,
+                intersection.coordinate.direction
+              );
+              const hasPort = intersection.port !== null;
+              return (
+                <g key={`debug-${intersection.id}`}>
+                  {/* 頂点マーカー */}
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={hasPort ? 6 : 4}
+                    fill={hasPort ? "#FF6B6B" : "#4ECDC4"}
+                    stroke="#333"
+                    strokeWidth="1"
+                  />
+                  {/* 座標ラベル */}
+                  <text
+                    x={x}
+                    y={y - 10}
+                    textAnchor="middle"
+                    fontSize="7"
+                    fontWeight="bold"
+                    fill="#000"
+                    stroke="#FFF"
+                    strokeWidth="2"
+                    paintOrder="stroke"
+                  >
+                    {intersection.id}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
       </svg>
 
       {/* サイコロ結果表示 */}
