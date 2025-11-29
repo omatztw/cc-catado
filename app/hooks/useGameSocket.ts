@@ -48,6 +48,8 @@ export interface UseGameSocketReturn {
   gameState: GameState | null;
   /** 現在のプレイヤーID */
   playerId: string | null;
+  /** 観戦者かどうか */
+  isSpectator: boolean;
   /** エラーメッセージ */
   error: string | null;
   /** チャットメッセージ一覧 */
@@ -69,6 +71,10 @@ export interface UseGameSocketReturn {
   rejoinRoom: (roomId: string, playerId: string) => void;
   /** ルームから退出 */
   leaveRoom: () => void;
+  /** 席に着く（観戦者→プレイヤー） */
+  takeSeat: () => void;
+  /** 席を立つ（プレイヤー→観戦者） */
+  leaveSeat: () => void;
   /** 公開ルーム一覧を取得 */
   fetchPublicRooms: () => void;
   /** ゲームアクションを送信 */
@@ -146,6 +152,7 @@ export function useGameSocket(
   const [isConnecting, setIsConnecting] = useState(false);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
+  const [isSpectator, setIsSpectator] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [publicRooms, setPublicRooms] = useState<RoomInfo[]>([]);
@@ -221,6 +228,7 @@ export function useGameSocket(
       if (data.success && data.gameState) {
         setPlayerId(data.playerId);
         setGameState(data.gameState);
+        setIsSpectator(false); // ルーム作成者は常にプレイヤー
         roomIdRef.current = data.roomId;
         setError(null);
         // セッション情報を保存
@@ -244,10 +252,13 @@ export function useGameSocket(
       if (data.success && data.gameState) {
         setPlayerId(data.playerId);
         setGameState(data.gameState);
+        setIsSpectator(data.isSpectator); // 観戦者かどうかを設定
         roomIdRef.current = data.roomId;
         setError(null);
-        // セッション情報を保存
-        const playerName = data.gameState.players.find(p => p.id === data.playerId)?.name || "";
+        // セッション情報を保存（観戦者の場合も保存）
+        const player = data.gameState.players.find(p => p.id === data.playerId);
+        const spectator = data.gameState.spectators.find(s => s.id === data.playerId);
+        const playerName = player?.name || spectator?.name || "";
         playerNameRef.current = playerName;
         saveSession({
           roomId: data.roomId,
@@ -267,10 +278,13 @@ export function useGameSocket(
       if (data.success && data.gameState) {
         setPlayerId(data.playerId);
         setGameState(data.gameState);
+        setIsSpectator(data.isSpectator); // 観戦者かどうかを設定
         roomIdRef.current = data.roomId;
         setError(null);
         // セッション情報を更新
-        const playerName = data.gameState.players.find(p => p.id === data.playerId)?.name || "";
+        const player = data.gameState.players.find(p => p.id === data.playerId);
+        const spectator = data.gameState.spectators.find(s => s.id === data.playerId);
+        const playerName = player?.name || spectator?.name || "";
         playerNameRef.current = playerName;
         saveSession({
           roomId: data.roomId,
@@ -289,6 +303,19 @@ export function useGameSocket(
 
     socket.on("player_reconnected", (data) => {
       console.log("[useGameSocket] Player reconnected:", data.playerName);
+    });
+
+    socket.on("seat_changed", (data) => {
+      console.log("[useGameSocket] Seat changed:", data);
+
+      if (data.success) {
+        setIsSpectator(data.isSpectator);
+        setError(null);
+      } else {
+        setError(data.error || "席の変更に失敗しました");
+        // エラーを3秒後にクリア
+        setTimeout(() => setError(null), 3000);
+      }
     });
 
     socket.on("game_reset", (data) => {
@@ -422,12 +449,37 @@ export function useGameSocket(
     socketRef.current.emit("leave_room", { roomId: roomIdRef.current });
     setGameState(null);
     setPlayerId(null);
+    setIsSpectator(false);
     setChatMessages([]);
     roomIdRef.current = null;
     playerNameRef.current = null;
     // セッション情報をクリア
     clearSession();
     setSavedSession(null);
+  }, []);
+
+  /**
+   * 席に着く（観戦者→プレイヤー）
+   */
+  const takeSeat = useCallback(() => {
+    if (!socketRef.current || !roomIdRef.current) {
+      setError("サーバーに接続されていません");
+      return;
+    }
+
+    socketRef.current.emit("take_seat", { roomId: roomIdRef.current });
+  }, []);
+
+  /**
+   * 席を立つ（プレイヤー→観戦者）
+   */
+  const leaveSeat = useCallback(() => {
+    if (!socketRef.current || !roomIdRef.current) {
+      setError("サーバーに接続されていません");
+      return;
+    }
+
+    socketRef.current.emit("leave_seat", { roomId: roomIdRef.current });
   }, []);
 
   /**
@@ -540,6 +592,7 @@ export function useGameSocket(
     isConnecting,
     gameState,
     playerId,
+    isSpectator,
     error,
     chatMessages,
     publicRooms,
@@ -548,6 +601,8 @@ export function useGameSocket(
     joinRoom,
     rejoinRoom,
     leaveRoom,
+    takeSeat,
+    leaveSeat,
     fetchPublicRooms,
     sendAction,
     sendChatMessage,

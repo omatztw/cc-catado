@@ -465,6 +465,7 @@ export function createInitialGameState(roomId: string, hostId: string): GameStat
     intersections,
     edges,
     players: [],
+    spectators: [],
     currentPlayerId: null,
     turnOrder: [],
     turnNumber: 0,
@@ -514,6 +515,7 @@ export function resetGameState(state: GameState): GameState {
     intersections,
     edges,
     players: resetPlayers,
+    spectators: state.spectators,
     currentPlayerId: null,
     turnOrder: [],
     turnNumber: 0,
@@ -653,6 +655,211 @@ export function removePlayerFromGame(
     ),
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * 観戦者をゲームに追加
+ */
+export function addSpectatorToGame(
+  state: GameState,
+  odspectatorId: string,
+  spectatorName: string
+): GameState {
+  // 既存の観戦者の再接続チェック
+  const existingSpectator = state.spectators.find((s) => s.id === odspectatorId);
+  if (existingSpectator) {
+    return {
+      ...state,
+      spectators: state.spectators.map((s) =>
+        s.id === odspectatorId ? { ...s, isConnected: true } : s
+      ),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  // プレイヤーとして既に存在するかチェック
+  const existingPlayer = state.players.find((p) => p.id === odspectatorId);
+  if (existingPlayer) {
+    return {
+      ...state,
+      players: state.players.map((p) =>
+        p.id === odspectatorId ? { ...p, isConnected: true } : p
+      ),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  const newSpectator = {
+    id: odspectatorId,
+    name: spectatorName,
+    isConnected: true,
+  };
+
+  return {
+    ...state,
+    spectators: [...state.spectators, newSpectator],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 観戦者をゲームから削除/切断
+ */
+export function removeSpectatorFromGame(
+  state: GameState,
+  odspectatorId: string,
+  permanent: boolean = false
+): GameState {
+  if (permanent) {
+    return {
+      ...state,
+      spectators: state.spectators.filter((s) => s.id !== odspectatorId),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  // 切断状態にする
+  return {
+    ...state,
+    spectators: state.spectators.map((s) =>
+      s.id === odspectatorId ? { ...s, isConnected: false } : s
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 観戦者が席に着く（プレイヤーになる）
+ */
+export function takeSeat(
+  state: GameState,
+  odspectatorId: string
+): GameState {
+  if (state.phase !== "waiting") {
+    throw new Error("ゲーム中は席に着けません");
+  }
+
+  if (state.players.length >= 4) {
+    throw new Error("席が満員です");
+  }
+
+  const spectator = state.spectators.find((s) => s.id === odspectatorId);
+  if (!spectator) {
+    throw new Error("観戦者が見つかりません");
+  }
+
+  // 新しいプレイヤーを作成
+  const newPlayer = createPlayer(odspectatorId, spectator.name, state.players);
+
+  return {
+    ...state,
+    players: [...state.players, newPlayer],
+    spectators: state.spectators.filter((s) => s.id !== odspectatorId),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * プレイヤーが席を立つ（観戦者になる）
+ */
+export function leaveSeat(
+  state: GameState,
+  playerId: string
+): GameState {
+  if (state.phase !== "waiting") {
+    throw new Error("ゲーム中は席を立てません");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) {
+    throw new Error("プレイヤーが見つかりません");
+  }
+
+  // ホストは席を立てない
+  if (playerId === state.hostId) {
+    throw new Error("ホストは席を立てません");
+  }
+
+  const newSpectator = {
+    id: playerId,
+    name: player.name,
+    isConnected: player.isConnected,
+  };
+
+  return {
+    ...state,
+    players: state.players.filter((p) => p.id !== playerId),
+    spectators: [...state.spectators, newSpectator],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 観戦者用にゲーム状態をフィルタリング（手札情報を隠す）
+ */
+export function filterStateForSpectator(state: GameState): GameState {
+  return {
+    ...state,
+    // プレイヤーの非公開情報を隠す
+    players: state.players.map((p) => ({
+      ...p,
+      // 資源の総数のみ表示
+      resources: {
+        wood: 0,
+        brick: 0,
+        wheat: 0,
+        ore: 0,
+        sheep: 0,
+      },
+      // 発展カードは枚数のみ
+      developmentCards: [],
+    })),
+    // 発展カードデッキの内容を隠す
+    developmentCardDeck: [],
+  };
+}
+
+/**
+ * 特定プレイヤー用にゲーム状態をフィルタリング（他プレイヤーの手札を隠す）
+ */
+export function filterStateForPlayer(state: GameState, playerId: string): GameState {
+  return {
+    ...state,
+    players: state.players.map((p) => {
+      if (p.id === playerId) {
+        // 自分自身の情報はそのまま
+        return p;
+      }
+      // 他プレイヤーの非公開情報を隠す
+      return {
+        ...p,
+        resources: {
+          wood: 0,
+          brick: 0,
+          wheat: 0,
+          ore: 0,
+          sheep: 0,
+        },
+        developmentCards: [],
+      };
+    }),
+    // 発展カードデッキの内容を隠す
+    developmentCardDeck: [],
+  };
+}
+
+/**
+ * ユーザーがプレイヤーか観戦者かを判定
+ */
+export function isSpectator(state: GameState, oduserId: string): boolean {
+  return state.spectators.some((s) => s.id === oduserId);
+}
+
+/**
+ * ユーザーがプレイヤーかを判定
+ */
+export function isPlayer(state: GameState, oduserId: string): boolean {
+  return state.players.some((p) => p.id === oduserId);
 }
 
 // ============================================

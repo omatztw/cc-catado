@@ -43,6 +43,14 @@ import {
   createInitialGameState,
   addPlayerToGame,
   removePlayerFromGame,
+  addSpectatorToGame,
+  removeSpectatorFromGame,
+  takeSeat,
+  leaveSeat,
+  filterStateForSpectator,
+  filterStateForPlayer,
+  isSpectator as checkIsSpectator,
+  isPlayer as checkIsPlayer,
   processGameAction,
   resetGameState,
 } from "./game-logic";
@@ -141,6 +149,29 @@ async function setupRedisAdapter(): Promise<void> {
 }
 
 // ============================================
+// ヘルパー関数
+// ============================================
+
+/**
+ * ルーム内の全クライアントにゲーム状態を送信（各クライアントに適切なフィルタリングを適用）
+ */
+async function broadcastGameState(roomId: string, gameState: GameState): Promise<void> {
+  const sockets = await io.in(roomId).fetchSockets();
+
+  for (const sock of sockets) {
+    const oduserId = await getPlayerIdBySocket(sock.id);
+    if (!oduserId) continue;
+
+    // プレイヤーか観戦者かで送信する状態をフィルタリング
+    const filteredState = checkIsPlayer(gameState, oduserId)
+      ? filterStateForPlayer(gameState, oduserId)
+      : filterStateForSpectator(gameState);
+
+    sock.emit("update_state", { gameState: filteredState });
+  }
+}
+
+// ============================================
 // イベントハンドラー
 // ============================================
 
@@ -183,6 +214,7 @@ async function handleCreateRoom(
       id: roomId,
       name: roomName,
       playerCount: gameState.players.length,
+      spectatorCount: gameState.spectators.length,
       maxPlayers: 4,
       status: "waiting",
       isPublic,
@@ -252,6 +284,7 @@ async function handleJoinRoom(
         roomId,
         playerId: "",
         gameState: null,
+        isSpectator: false,
         error: "ルームが見つかりません",
       });
       return;
@@ -266,6 +299,7 @@ async function handleJoinRoom(
           roomId,
           playerId: "",
           gameState: null,
+          isSpectator: false,
           error: "パスワードが正しくありません",
         });
         return;
@@ -273,7 +307,7 @@ async function handleJoinRoom(
     }
 
     // プレイヤーIDを生成
-    const playerId = uuidv4();
+    const oduserId = uuidv4();
 
     // 既存のゲーム状態を取得
     let gameState = await getGameState(roomId);
@@ -284,32 +318,21 @@ async function handleJoinRoom(
         roomId,
         playerId: "",
         gameState: null,
+        isSpectator: false,
         error: "ゲーム状態が見つかりません",
       });
       return;
     }
 
-    // プレイヤーを追加
-    try {
-      gameState = addPlayerToGame(gameState, playerId, playerName);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Failed to join room";
-      socket.emit("room_joined", {
-        success: false,
-        roomId,
-        playerId: "",
-        gameState: null,
-        error: errorMessage,
-      });
-      return;
-    }
+    // 常に観戦者として追加（ゲーム中でも参加可能）
+    gameState = addSpectatorToGame(gameState, oduserId, playerName);
+    const isJoiningAsSpectator = true;
 
     // Socket.ioルームに参加
     await socket.join(roomId);
 
     // Redis にマッピングを保存
-    await setSocketPlayerMapping(socket.id, playerId, roomId);
+    await setSocketPlayerMapping(socket.id, oduserId, roomId);
 
     // ゲーム状態を保存
     await saveGameState(roomId, gameState);
@@ -318,29 +341,30 @@ async function handleJoinRoom(
     const roomInfo: RoomInfo = {
       ...existingRoomInfo,
       playerCount: gameState.players.length,
-      status: gameState.phase === "waiting" ? "waiting" : "playing",
+      spectatorCount: gameState.spectators.length,
+      status: gameState.phase === "waiting" ? "waiting" :
+              gameState.phase === "game_over" ? "finished" : "playing",
     };
     await saveRoomInfo(roomId, roomInfo);
 
-    // 参加者に通知
+    // 参加者に通知（観戦者の場合は手札情報を隠す）
+    const filteredState = isJoiningAsSpectator
+      ? filterStateForSpectator(gameState)
+      : filterStateForPlayer(gameState, oduserId);
+
     socket.emit("room_joined", {
       success: true,
       roomId,
-      playerId,
-      gameState,
+      playerId: oduserId,
+      gameState: filteredState,
+      isSpectator: isJoiningAsSpectator,
     });
 
-    // 他のプレイヤーに通知
-    const newPlayer = gameState.players.find((p) => p.id === playerId);
-    if (newPlayer) {
-      socket.to(roomId).emit("player_joined", { player: newPlayer });
-    }
-
-    // ルーム全体に更新された状態を送信
-    io.to(roomId).emit("update_state", { gameState });
+    // ルーム全体に更新された状態を送信（各クライアントには適切にフィルタ済みの状態を送る）
+    await broadcastGameState(roomId, gameState);
 
     console.log(
-      `[Server] Player ${playerName} (${playerId}) joined room ${roomId}`
+      `[Server] ${isJoiningAsSpectator ? "Spectator" : "Player"} ${playerName} (${oduserId}) joined room ${roomId}`
     );
   } catch (error) {
     console.error("[Server] Error in handleJoinRoom:", error);
@@ -349,6 +373,7 @@ async function handleJoinRoom(
       roomId,
       playerId: "",
       gameState: null,
+      isSpectator: false,
       error: "Internal server error",
     });
   }
@@ -364,9 +389,9 @@ async function handleLeaveRoom(
   const { roomId } = data;
 
   try {
-    const playerId = await getPlayerIdBySocket(socket.id);
+    const oduserId = await getPlayerIdBySocket(socket.id);
 
-    if (!playerId) {
+    if (!oduserId) {
       return;
     }
 
@@ -374,19 +399,37 @@ async function handleLeaveRoom(
     let gameState = await getGameState(roomId);
 
     if (gameState) {
-      gameState = removePlayerFromGame(
-        gameState,
-        playerId,
-        gameState.phase === "waiting"
-      );
+      // プレイヤーか観戦者かで処理を分ける
+      if (checkIsPlayer(gameState, oduserId)) {
+        gameState = removePlayerFromGame(
+          gameState,
+          oduserId,
+          gameState.phase === "waiting"
+        );
+        // 他のプレイヤーに通知
+        socket.to(roomId).emit("player_left", { playerId: oduserId });
+      } else if (checkIsSpectator(gameState, oduserId)) {
+        gameState = removeSpectatorFromGame(gameState, oduserId, true);
+      }
+
       await saveGameState(roomId, gameState);
 
-      // 他のプレイヤーに通知
-      socket.to(roomId).emit("player_left", { playerId });
-      io.to(roomId).emit("update_state", { gameState });
+      // ルーム情報を更新
+      const existingRoomInfo = await getRoomInfo(roomId);
+      if (existingRoomInfo) {
+        const roomInfo: RoomInfo = {
+          ...existingRoomInfo,
+          playerCount: gameState.players.length,
+          spectatorCount: gameState.spectators.length,
+        };
+        await saveRoomInfo(roomId, roomInfo);
+      }
 
-      // プレイヤーがいなくなったらルームを削除
-      if (gameState.players.length === 0) {
+      // ルーム全体に更新された状態を送信
+      await broadcastGameState(roomId, gameState);
+
+      // プレイヤーも観戦者もいなくなったらルームを削除
+      if (gameState.players.length === 0 && gameState.spectators.length === 0) {
         await deleteGameState(roomId);
         await deleteRoomInfo(roomId);
         console.log(`[Server] Room ${roomId} deleted (empty)`);
@@ -399,9 +442,163 @@ async function handleLeaveRoom(
     // Socket.ioルームから退出
     await socket.leave(roomId);
 
-    console.log(`[Server] Player ${playerId} left room ${roomId}`);
+    console.log(`[Server] User ${oduserId} left room ${roomId}`);
   } catch (error) {
     console.error("[Server] Error in handleLeaveRoom:", error);
+  }
+}
+
+/**
+ * 席に着くハンドラー（観戦者→プレイヤー）
+ */
+async function handleTakeSeat(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: { roomId: string }
+): Promise<void> {
+  const { roomId } = data;
+
+  try {
+    const oduserId = await getPlayerIdBySocket(socket.id);
+
+    if (!oduserId) {
+      socket.emit("seat_changed", {
+        success: false,
+        isSpectator: true,
+        error: "ユーザーが見つかりません",
+      });
+      return;
+    }
+
+    let gameState = await getGameState(roomId);
+
+    if (!gameState) {
+      socket.emit("seat_changed", {
+        success: false,
+        isSpectator: true,
+        error: "ゲーム状態が見つかりません",
+      });
+      return;
+    }
+
+    try {
+      gameState = takeSeat(gameState, oduserId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "席に着けませんでした";
+      socket.emit("seat_changed", {
+        success: false,
+        isSpectator: true,
+        error: errorMessage,
+      });
+      return;
+    }
+
+    await saveGameState(roomId, gameState);
+
+    // ルーム情報を更新
+    const existingRoomInfo = await getRoomInfo(roomId);
+    if (existingRoomInfo) {
+      const roomInfo: RoomInfo = {
+        ...existingRoomInfo,
+        playerCount: gameState.players.length,
+        spectatorCount: gameState.spectators.length,
+      };
+      await saveRoomInfo(roomId, roomInfo);
+    }
+
+    // 席変更の結果を送信
+    socket.emit("seat_changed", {
+      success: true,
+      isSpectator: false,
+    });
+
+    // ルーム全体に更新された状態を送信
+    await broadcastGameState(roomId, gameState);
+
+    console.log(`[Server] User ${oduserId} took a seat in room ${roomId}`);
+  } catch (error) {
+    console.error("[Server] Error in handleTakeSeat:", error);
+    socket.emit("seat_changed", {
+      success: false,
+      isSpectator: true,
+      error: "Internal server error",
+    });
+  }
+}
+
+/**
+ * 席を立つハンドラー（プレイヤー→観戦者）
+ */
+async function handleLeaveSeat(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: { roomId: string }
+): Promise<void> {
+  const { roomId } = data;
+
+  try {
+    const oduserId = await getPlayerIdBySocket(socket.id);
+
+    if (!oduserId) {
+      socket.emit("seat_changed", {
+        success: false,
+        isSpectator: false,
+        error: "ユーザーが見つかりません",
+      });
+      return;
+    }
+
+    let gameState = await getGameState(roomId);
+
+    if (!gameState) {
+      socket.emit("seat_changed", {
+        success: false,
+        isSpectator: false,
+        error: "ゲーム状態が見つかりません",
+      });
+      return;
+    }
+
+    try {
+      gameState = leaveSeat(gameState, oduserId);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "席を立てませんでした";
+      socket.emit("seat_changed", {
+        success: false,
+        isSpectator: false,
+        error: errorMessage,
+      });
+      return;
+    }
+
+    await saveGameState(roomId, gameState);
+
+    // ルーム情報を更新
+    const existingRoomInfo = await getRoomInfo(roomId);
+    if (existingRoomInfo) {
+      const roomInfo: RoomInfo = {
+        ...existingRoomInfo,
+        playerCount: gameState.players.length,
+        spectatorCount: gameState.spectators.length,
+      };
+      await saveRoomInfo(roomId, roomInfo);
+    }
+
+    // 席変更の結果を送信
+    socket.emit("seat_changed", {
+      success: true,
+      isSpectator: true,
+    });
+
+    // ルーム全体に更新された状態を送信
+    await broadcastGameState(roomId, gameState);
+
+    console.log(`[Server] User ${oduserId} left seat in room ${roomId}`);
+  } catch (error) {
+    console.error("[Server] Error in handleLeaveSeat:", error);
+    socket.emit("seat_changed", {
+      success: false,
+      isSpectator: false,
+      error: "Internal server error",
+    });
   }
 }
 
@@ -461,8 +658,8 @@ async function handleGameAction(
       action: action.type,
     });
 
-    // ルーム全体に更新を配信
-    io.to(roomId).emit("update_state", { gameState });
+    // ルーム全体に更新を配信（各クライアントに適切にフィルタリング）
+    await broadcastGameState(roomId, gameState);
 
     console.log(
       `[Server] Action ${action.type} processed for room ${roomId} by player ${playerId}`
@@ -494,9 +691,9 @@ async function handleChatMessage(
   const { roomId, message } = data;
 
   try {
-    const playerId = await getPlayerIdBySocket(socket.id);
+    const oduserId = await getPlayerIdBySocket(socket.id);
 
-    if (!playerId) {
+    if (!oduserId) {
       return;
     }
 
@@ -505,14 +702,19 @@ async function handleChatMessage(
       return;
     }
 
-    const player = gameState.players.find((p) => p.id === playerId);
-    if (!player) {
+    // プレイヤーか観戦者かを確認して名前を取得
+    const player = gameState.players.find((p) => p.id === oduserId);
+    const spectator = gameState.spectators.find((s) => s.id === oduserId);
+
+    if (!player && !spectator) {
       return;
     }
 
+    const userName = player?.name || spectator?.name || "Unknown";
+
     const chatMessage = {
-      playerId,
-      playerName: player.name,
+      playerId: oduserId,
+      playerName: userName,
       message,
       timestamp: new Date().toISOString(),
     };
@@ -523,7 +725,7 @@ async function handleChatMessage(
     // ルーム全体に配信
     io.to(roomId).emit("chat_received", chatMessage);
 
-    console.log(`[Server] Chat message in room ${roomId} from ${player.name}`);
+    console.log(`[Server] Chat message in room ${roomId} from ${userName}`);
   } catch (error) {
     console.error("[Server] Error in handleChatMessage:", error);
   }
@@ -540,7 +742,7 @@ async function handleRejoinRoom(
 
   try {
     // ゲーム状態を取得
-    const gameState = await getGameState(roomId);
+    let gameState = await getGameState(roomId);
 
     if (!gameState) {
       socket.emit("room_rejoined", {
@@ -548,33 +750,48 @@ async function handleRejoinRoom(
         roomId,
         playerId,
         gameState: null,
+        isSpectator: false,
         error: "ルームが見つかりません",
       });
       return;
     }
 
-    // プレイヤーが存在するか確認
+    // プレイヤーまたは観戦者として存在するか確認
     const existingPlayer = gameState.players.find((p) => p.id === playerId);
+    const existingSpectator = gameState.spectators.find((s) => s.id === playerId);
 
-    if (!existingPlayer) {
+    if (!existingPlayer && !existingSpectator) {
       socket.emit("room_rejoined", {
         success: false,
         roomId,
         playerId,
         gameState: null,
-        error: "プレイヤーが見つかりません",
+        isSpectator: false,
+        error: "ユーザーが見つかりません",
       });
       return;
     }
 
-    // プレイヤーを再接続状態に更新
-    const updatedGameState = {
-      ...gameState,
-      players: gameState.players.map((p) =>
-        p.id === playerId ? { ...p, isConnected: true } : p
-      ),
-      updatedAt: new Date().toISOString(),
-    };
+    const isRejoinAsSpectator = !existingPlayer;
+
+    // 再接続状態に更新
+    if (existingPlayer) {
+      gameState = {
+        ...gameState,
+        players: gameState.players.map((p) =>
+          p.id === playerId ? { ...p, isConnected: true } : p
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      gameState = {
+        ...gameState,
+        spectators: gameState.spectators.map((s) =>
+          s.id === playerId ? { ...s, isConnected: true } : s
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+    }
 
     // Socket.ioルームに参加
     await socket.join(roomId);
@@ -583,27 +800,33 @@ async function handleRejoinRoom(
     await setSocketPlayerMapping(socket.id, playerId, roomId);
 
     // ゲーム状態を保存
-    await saveGameState(roomId, updatedGameState);
+    await saveGameState(roomId, gameState);
 
-    // 再参加者に通知
+    // 再参加者に適切にフィルタリングされた状態を送信
+    const filteredState = isRejoinAsSpectator
+      ? filterStateForSpectator(gameState)
+      : filterStateForPlayer(gameState, playerId);
+
     socket.emit("room_rejoined", {
       success: true,
       roomId,
       playerId,
-      gameState: updatedGameState,
+      gameState: filteredState,
+      isSpectator: isRejoinAsSpectator,
     });
 
     // 他のプレイヤーに再接続を通知
+    const userName = existingPlayer?.name || existingSpectator?.name || "Unknown";
     socket.to(roomId).emit("player_reconnected", {
       playerId,
-      playerName: existingPlayer.name,
+      playerName: userName,
     });
 
     // ルーム全体に更新された状態を送信
-    io.to(roomId).emit("update_state", { gameState: updatedGameState });
+    await broadcastGameState(roomId, gameState);
 
     console.log(
-      `[Server] Player ${existingPlayer.name} (${playerId}) rejoined room ${roomId}`
+      `[Server] ${isRejoinAsSpectator ? "Spectator" : "Player"} ${userName} (${playerId}) rejoined room ${roomId}`
     );
   } catch (error) {
     console.error("[Server] Error in handleRejoinRoom:", error);
@@ -612,6 +835,7 @@ async function handleRejoinRoom(
       roomId,
       playerId,
       gameState: null,
+      isSpectator: false,
       error: "再接続に失敗しました",
     });
   }
@@ -675,7 +899,9 @@ async function handleResetGame(
 
     // ルーム全体にリセット通知
     io.to(roomId).emit("game_reset", { gameState: newGameState });
-    io.to(roomId).emit("update_state", { gameState: newGameState });
+
+    // 各クライアントに適切にフィルタリングした状態を送信
+    await broadcastGameState(roomId, newGameState);
 
     console.log(`[Server] Game reset in room ${roomId} by host ${playerId}`);
   } catch (error) {
@@ -703,16 +929,23 @@ async function handleDisconnect(
       let gameState = await getGameState(roomId);
 
       if (gameState) {
-        gameState = removePlayerFromGame(gameState, playerId, false);
+        // プレイヤーか観戦者かで処理を分ける
+        if (checkIsPlayer(gameState, playerId)) {
+          gameState = removePlayerFromGame(gameState, playerId, false);
+          // 他のプレイヤーに通知
+          socket.to(roomId).emit("player_left", { playerId });
+        } else if (checkIsSpectator(gameState, playerId)) {
+          gameState = removeSpectatorFromGame(gameState, playerId, false);
+        }
+
         await saveGameState(roomId, gameState);
 
-        // 他のプレイヤーに通知
-        socket.to(roomId).emit("player_left", { playerId });
-        io.to(roomId).emit("update_state", { gameState });
+        // ルーム全体に更新された状態を送信
+        await broadcastGameState(roomId, gameState);
       }
 
       console.log(
-        `[Server] Player ${playerId} disconnected from room ${roomId}`
+        `[Server] User ${playerId} disconnected from room ${roomId}`
       );
     }
   } catch (error) {
@@ -732,6 +965,8 @@ io.on("connection", (socket) => {
   socket.on("join_room", (data) => handleJoinRoom(socket, data));
   socket.on("rejoin_room", (data) => handleRejoinRoom(socket, data));
   socket.on("leave_room", (data) => handleLeaveRoom(socket, data));
+  socket.on("take_seat", (data) => handleTakeSeat(socket, data));
+  socket.on("leave_seat", (data) => handleLeaveSeat(socket, data));
   socket.on("get_public_rooms", () => handleGetPublicRooms(socket));
   socket.on("game_action", (action) => handleGameAction(socket, action));
   socket.on("chat_message", (data) => handleChatMessage(socket, data));

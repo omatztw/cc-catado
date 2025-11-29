@@ -316,10 +316,10 @@ function PublicRoomList({
           </div>
           <button
             onClick={() => onJoin(room)}
-            disabled={isLoading || room.playerCount >= room.maxPlayers || room.status !== "waiting"}
+            disabled={isLoading || room.status === "finished"}
             className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
           >
-            参加
+            {room.status === "playing" ? "観戦" : "参加"}
           </button>
         </div>
       ))}
@@ -721,13 +721,19 @@ function PlayerPanel({
 function ActionPanel({
   gameState,
   playerId,
+  isSpectator,
   onAction,
   onResetGame,
+  onTakeSeat,
+  onLeaveSeat,
 }: {
   gameState: GameState;
   playerId: string;
+  isSpectator: boolean;
   onAction: (action: Omit<GameAction, "roomId">) => void;
   onResetGame: () => void;
+  onTakeSeat: () => void;
+  onLeaveSeat: () => void;
 }) {
   const isMyTurn = gameState.currentPlayerId === playerId;
   const phase = gameState.phase;
@@ -920,13 +926,65 @@ function ActionPanel({
 
   // 待機中
   if (phase === "waiting") {
+    const canStartGame = gameState.players.length >= 3 && gameState.players.length <= 4;
+    const canTakeSeat = isSpectator && gameState.players.length < 4;
+    const canLeaveSeat = !isSpectator && !isHost;
+
     return (
       <div className="bg-white rounded-lg shadow p-4">
         <h3 className="font-semibold text-gray-800 mb-2">待機中</h3>
-        <p className="text-sm text-gray-600 mb-3">
-          {gameState.players.length}/4 人が参加中
-        </p>
-        {gameState.players.length >= 3 && (
+
+        {/* プレイヤー席 */}
+        <div className="mb-3">
+          <p className="text-sm text-gray-600">
+            プレイヤー: {gameState.players.length}/4 人
+          </p>
+        </div>
+
+        {/* 観戦者リスト */}
+        {gameState.spectators.length > 0 && (
+          <div className="mb-3 p-2 bg-gray-50 rounded">
+            <p className="text-xs text-gray-500 mb-1">観戦者:</p>
+            <div className="flex flex-wrap gap-1">
+              {gameState.spectators.map((s) => (
+                <span
+                  key={s.id}
+                  className={`px-2 py-0.5 text-xs rounded ${
+                    s.id === playerId
+                      ? "bg-blue-100 text-blue-800"
+                      : "bg-gray-200 text-gray-700"
+                  } ${!s.isConnected ? "opacity-50" : ""}`}
+                >
+                  {s.name}
+                  {s.id === playerId && " (あなた)"}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 席の操作 */}
+        {isSpectator ? (
+          <button
+            onClick={onTakeSeat}
+            disabled={!canTakeSeat}
+            className="w-full py-2 mb-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
+          >
+            {canTakeSeat ? "席に着く" : "席が満員です"}
+          </button>
+        ) : (
+          canLeaveSeat && (
+            <button
+              onClick={onLeaveSeat}
+              className="w-full py-2 mb-2 bg-gray-500 text-white rounded-lg font-semibold hover:bg-gray-600 transition"
+            >
+              席を立つ
+            </button>
+          )
+        )}
+
+        {/* ゲーム開始ボタン（プレイヤーのみ） */}
+        {!isSpectator && canStartGame && (
           <button
             onClick={handleStartGame}
             className="w-full py-2 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition"
@@ -934,14 +992,22 @@ function ActionPanel({
             ゲーム開始
           </button>
         )}
-        {gameState.players.length < 3 && (
+
+        {!isSpectator && gameState.players.length < 3 && (
           <p className="text-xs text-gray-500">
             ゲームを開始するには3人以上必要です
           </p>
         )}
+
         {isHost && (
           <p className="text-xs text-blue-600 mt-2">
             あなたはこのルームのホストです
+          </p>
+        )}
+
+        {isSpectator && (
+          <p className="text-xs text-purple-600 mt-2">
+            あなたは観戦者です
           </p>
         )}
       </div>
@@ -961,7 +1027,7 @@ function ActionPanel({
             勝者: <span className="font-semibold">{winner.name}</span>
           </p>
         )}
-        {isHost && (
+        {isHost && !isSpectator && (
           <button
             onClick={onResetGame}
             className="w-full py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition"
@@ -969,10 +1035,71 @@ function ActionPanel({
             新しいゲームを始める
           </button>
         )}
-        {!isHost && (
+        {!isHost && !isSpectator && (
           <p className="text-xs text-gray-500 mt-2">
             ホストがゲームをリセットするのを待っています
           </p>
+        )}
+        {isSpectator && (
+          <p className="text-xs text-purple-600 mt-2">
+            観戦中
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // 観戦者用のビュー（ゲーム中）
+  if (isSpectator) {
+    return (
+      <div className="bg-white rounded-lg shadow p-4">
+        {/* 観戦者バッジ */}
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-gray-800">{PHASE_LABELS[phase]}</h3>
+          <span className="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-full">
+            観戦中
+          </span>
+        </div>
+
+        {/* サイコロ結果 */}
+        {gameState.diceResult && (
+          <div className="mb-3 p-2 bg-blue-50 rounded text-center">
+            <span className="text-lg font-bold">
+              🎲 {gameState.diceResult.die1} + {gameState.diceResult.die2} = {gameState.diceResult.total}
+            </span>
+          </div>
+        )}
+
+        {/* 現在のターンプレイヤー */}
+        <p className="text-sm text-gray-600 text-center">
+          {
+            gameState.players.find(
+              (p) => p.id === gameState.currentPlayerId
+            )?.name
+          }{" "}
+          のターンです
+        </p>
+
+        {/* 観戦者リスト */}
+        {gameState.spectators.length > 0 && (
+          <div className="mt-3 pt-3 border-t">
+            <p className="text-xs text-gray-500 mb-1">観戦者:</p>
+            <div className="flex flex-wrap gap-1">
+              {gameState.spectators.map((s) => (
+                <span
+                  key={s.id}
+                  className={`px-2 py-0.5 text-xs rounded ${
+                    s.id === playerId
+                      ? "bg-purple-100 text-purple-800"
+                      : "bg-gray-200 text-gray-700"
+                  }`}
+                >
+                  {s.name}
+                  {s.id === playerId && " (あなた)"}
+                </span>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     );
@@ -1604,6 +1731,7 @@ export function GameRoom() {
     isConnecting,
     gameState,
     playerId,
+    isSpectator,
     error,
     chatMessages,
     publicRooms,
@@ -1612,6 +1740,8 @@ export function GameRoom() {
     joinRoom,
     rejoinRoom,
     leaveRoom,
+    takeSeat,
+    leaveSeat,
     fetchPublicRooms,
     sendAction,
     sendChatMessage,
@@ -1670,9 +1800,9 @@ export function GameRoom() {
     prevCurrentPlayerIdRef.current = gameState.currentPlayerId;
   }, [gameState, playerId, playSound, notifyTurn]);
 
-  // 選択可能な要素
+  // 選択可能な要素（観戦者は何も選択できない）
   const selectableIntersections = useMemo(() => {
-    if (!gameState || !playerId) return [];
+    if (!gameState || !playerId || isSpectator) return [];
 
     const phase = gameState.phase;
     const isMyTurn = gameState.currentPlayerId === playerId;
@@ -1703,10 +1833,10 @@ export function GameRoom() {
     }
 
     return [];
-  }, [gameState, playerId]);
+  }, [gameState, playerId, isSpectator]);
 
   const selectableEdges = useMemo(() => {
-    if (!gameState || !playerId) return [];
+    if (!gameState || !playerId || isSpectator) return [];
 
     const phase = gameState.phase;
     const isMyTurn = gameState.currentPlayerId === playerId;
@@ -1725,10 +1855,10 @@ export function GameRoom() {
     }
 
     return [];
-  }, [gameState, playerId]);
+  }, [gameState, playerId, isSpectator]);
 
   const selectableHexes = useMemo(() => {
-    if (!gameState || !playerId) return [];
+    if (!gameState || !playerId || isSpectator) return [];
 
     const phase = gameState.phase;
     const isMyTurn = gameState.currentPlayerId === playerId;
@@ -1739,7 +1869,7 @@ export function GameRoom() {
     }
 
     return [];
-  }, [gameState, playerId]);
+  }, [gameState, playerId, isSpectator]);
 
   // イベントハンドラー
   const handleIntersectionClick = useCallback(
@@ -1874,7 +2004,13 @@ export function GameRoom() {
                 {settings.notificationEnabled && permission === "granted" ? "🔔" : "🔕"}
               </button>
             </div>
-            {gameState.hostId === playerId && gameState.phase !== "waiting" && gameState.phase !== "game_over" && (
+            {/* 観戦者インジケーター */}
+            {isSpectator && (
+              <span className="px-2 py-1 bg-purple-600 rounded text-xs">
+                観戦中
+              </span>
+            )}
+            {gameState.hostId === playerId && !isSpectator && gameState.phase !== "waiting" && gameState.phase !== "game_over" && (
               <button
                 onClick={() => {
                   if (window.confirm("ゲームをリセットしますか？全員の進行状況がクリアされます。")) {
@@ -1942,8 +2078,11 @@ export function GameRoom() {
               <ActionPanel
                 gameState={gameState}
                 playerId={playerId}
+                isSpectator={isSpectator}
                 onAction={sendAction}
                 onResetGame={resetGame}
+                onTakeSeat={takeSeat}
+                onLeaveSeat={leaveSeat}
               />
             )}
             <ChatPanel

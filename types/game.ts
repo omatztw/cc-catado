@@ -177,6 +177,15 @@ export interface Player {
   isConnected: boolean;
 }
 
+/**
+ * 観戦者情報
+ */
+export interface Spectator {
+  id: string;
+  name: string;
+  isConnected: boolean;
+}
+
 // ============================================
 // ゲーム状態
 // ============================================
@@ -237,8 +246,10 @@ export interface GameState {
   intersections: Intersection[];
   // 辺一覧
   edges: Edge[];
-  // プレイヤー一覧
+  // プレイヤー一覧（席に着いた人）
   players: Player[];
+  // 観戦者一覧
+  spectators: Spectator[];
   // 現在のターンのプレイヤーID
   currentPlayerId: string | null;
   // ターン順のプレイヤーID配列
@@ -297,6 +308,10 @@ export interface ClientToServerEvents {
   leave_room: (data: { roomId: string }) => void;
   // 公開ルーム一覧取得
   get_public_rooms: () => void;
+  // 席に着く（観戦者→プレイヤー）
+  take_seat: (data: { roomId: string }) => void;
+  // 席を立つ（プレイヤー→観戦者）
+  leave_seat: (data: { roomId: string }) => void;
   // ゲームアクション
   game_action: (data: GameAction) => void;
   // チャットメッセージ送信
@@ -323,6 +338,7 @@ export interface ServerToClientEvents {
     roomId: string;
     playerId: string;
     gameState: GameState | null;
+    isSpectator: boolean;
     error?: string;
   }) => void;
   // ルーム再参加結果
@@ -331,6 +347,13 @@ export interface ServerToClientEvents {
     roomId: string;
     playerId: string;
     gameState: GameState | null;
+    isSpectator: boolean;
+    error?: string;
+  }) => void;
+  // 席変更結果
+  seat_changed: (data: {
+    success: boolean;
+    isSpectator: boolean;
     error?: string;
   }) => void;
   // 公開ルーム一覧
@@ -462,6 +485,7 @@ export interface RoomInfo {
   id: string;
   name: string;
   playerCount: number;
+  spectatorCount: number;
   maxPlayers: number;
   status: "waiting" | "playing" | "finished";
   isPublic: boolean;
