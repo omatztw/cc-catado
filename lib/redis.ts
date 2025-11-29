@@ -518,6 +518,99 @@ export async function getChatHistory(
 }
 
 // ============================================
+// ルームアクティビティ管理
+// ============================================
+
+/**
+ * ルームの最終アクティビティ日時を更新
+ */
+export async function updateRoomActivity(roomId: string): Promise<void> {
+  const client = getDataClient();
+  const key = RedisKeys.roomInfo(roomId);
+
+  const data = await client.get(key);
+  if (!data) {
+    return;
+  }
+
+  try {
+    const roomInfo = JSON.parse(data) as RoomInfo;
+    roomInfo.lastActivityAt = new Date().toISOString();
+    await client.set(key, JSON.stringify(roomInfo));
+    await client.expire(key, 86400);
+  } catch (error) {
+    console.error(
+      `[Redis] Failed to update room activity for room: ${roomId}`,
+      error
+    );
+  }
+}
+
+/**
+ * 指定した時間以上非アクティブなルームIDを取得
+ * @param inactiveThresholdMs 非アクティブとみなすミリ秒数
+ */
+export async function getInactiveRoomIds(
+  inactiveThresholdMs: number
+): Promise<string[]> {
+  const client = getDataClient();
+  const roomIds = await client.smembers(RedisKeys.activeRooms());
+
+  if (roomIds.length === 0) {
+    return [];
+  }
+
+  const now = Date.now();
+  const inactiveRoomIds: string[] = [];
+
+  for (const roomId of roomIds) {
+    const roomInfo = await getRoomInfo(roomId);
+
+    if (!roomInfo) {
+      // ルーム情報がない場合は削除対象
+      inactiveRoomIds.push(roomId);
+      continue;
+    }
+
+    // lastActivityAtがない場合はcreatedAtを使用（後方互換性）
+    const lastActivity = roomInfo.lastActivityAt || roomInfo.createdAt;
+    const lastActivityTime = new Date(lastActivity).getTime();
+
+    if (now - lastActivityTime > inactiveThresholdMs) {
+      inactiveRoomIds.push(roomId);
+    }
+  }
+
+  return inactiveRoomIds;
+}
+
+/**
+ * ルームを完全に削除（関連するすべてのデータを削除）
+ */
+export async function deleteRoomCompletely(roomId: string): Promise<void> {
+  const client = getDataClient();
+
+  // ゲーム状態を削除
+  await client.del(RedisKeys.gameState(roomId));
+
+  // ルーム情報を削除
+  await client.del(RedisKeys.roomInfo(roomId));
+  await client.del(RedisKeys.roomPassword(roomId));
+
+  // ルームリストから削除
+  await client.srem(RedisKeys.activeRooms(), roomId);
+  await client.srem(RedisKeys.publicRooms(), roomId);
+
+  // チャット履歴を削除
+  await client.del(RedisKeys.chatHistory(roomId));
+
+  // ルームプレイヤー一覧を削除
+  await client.del(RedisKeys.roomPlayers(roomId));
+
+  console.log(`[Redis] Room ${roomId} completely deleted`);
+}
+
+// ============================================
 // ヘルスチェック
 // ============================================
 

@@ -493,6 +493,8 @@ export interface RoomInfo {
   hostId: string;
   hostName: string;
   createdAt: string;
+  /** 最後にアクティビティがあった日時（ゲームアクション、チャット等） */
+  lastActivityAt: string;
 }
 
 /**

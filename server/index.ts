@@ -37,6 +37,9 @@ import {
   saveChatMessage,
   getChatHistory,
   healthCheck,
+  updateRoomActivity,
+  getInactiveRoomIds,
+  deleteRoomCompletely,
 } from "../lib/redis";
 
 import {
@@ -61,6 +64,18 @@ import {
 
 const PORT = parseInt(process.env.SOCKET_PORT || "3001", 10);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
+
+// 非アクティブルーム自動削除の設定
+// ROOM_INACTIVE_TIMEOUT_MS: 非アクティブとみなすまでの時間（ミリ秒）デフォルト: 30分
+const ROOM_INACTIVE_TIMEOUT_MS = parseInt(
+  process.env.ROOM_INACTIVE_TIMEOUT_MS || String(30 * 60 * 1000),
+  10
+);
+// ROOM_CLEANUP_INTERVAL_MS: クリーンアップチェックの間隔（ミリ秒）デフォルト: 5分
+const ROOM_CLEANUP_INTERVAL_MS = parseInt(
+  process.env.ROOM_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000),
+  10
+);
 
 // ============================================
 // サーバー初期化
@@ -210,6 +225,7 @@ async function handleCreateRoom(
     await saveGameState(roomId, gameState);
 
     // ルーム情報を作成・保存
+    const now = new Date().toISOString();
     const roomInfo: RoomInfo = {
       id: roomId,
       name: roomName,
@@ -222,6 +238,7 @@ async function handleCreateRoom(
       hostId: playerId,
       hostName: playerName,
       createdAt: gameState.createdAt,
+      lastActivityAt: now,
     };
     await saveRoomInfo(roomId, roomInfo, password);
 
@@ -344,6 +361,7 @@ async function handleJoinRoom(
       spectatorCount: gameState.spectators.length,
       status: gameState.phase === "waiting" ? "waiting" :
               gameState.phase === "game_over" ? "finished" : "playing",
+      lastActivityAt: new Date().toISOString(),
     };
     await saveRoomInfo(roomId, roomInfo);
 
@@ -652,6 +670,9 @@ async function handleGameAction(
     // 状態を保存
     await saveGameState(roomId, gameState);
 
+    // ルームのアクティビティを更新
+    await updateRoomActivity(roomId);
+
     // 成功を通知
     socket.emit("action_result", {
       success: true,
@@ -721,6 +742,9 @@ async function handleChatMessage(
 
     // チャット履歴を保存
     await saveChatMessage(roomId, chatMessage);
+
+    // ルームのアクティビティを更新
+    await updateRoomActivity(roomId);
 
     // ルーム全体に配信
     io.to(roomId).emit("chat_received", chatMessage);
@@ -980,6 +1004,77 @@ io.on("connection", (socket) => {
 });
 
 // ============================================
+// 非アクティブルーム自動削除
+// ============================================
+
+let cleanupIntervalId: NodeJS.Timeout | null = null;
+
+/**
+ * 非アクティブなルームをクリーンアップ
+ */
+async function cleanupInactiveRooms(): Promise<void> {
+  try {
+    const inactiveRoomIds = await getInactiveRoomIds(ROOM_INACTIVE_TIMEOUT_MS);
+
+    if (inactiveRoomIds.length === 0) {
+      return;
+    }
+
+    console.log(
+      `[Server] Found ${inactiveRoomIds.length} inactive room(s) to clean up`
+    );
+
+    for (const roomId of inactiveRoomIds) {
+      // ルーム内の全ソケットに通知
+      io.to(roomId).emit("error", {
+        message: "ルームは非アクティブのため削除されました",
+        code: "ROOM_INACTIVE_DELETED",
+      });
+
+      // ルーム内の全ソケットを退出させる
+      const sockets = await io.in(roomId).fetchSockets();
+      for (const socket of sockets) {
+        socket.leave(roomId);
+      }
+
+      // ルームを完全に削除
+      await deleteRoomCompletely(roomId);
+      console.log(`[Server] Inactive room ${roomId} deleted`);
+    }
+  } catch (error) {
+    console.error("[Server] Error in cleanupInactiveRooms:", error);
+  }
+}
+
+/**
+ * 定期的なクリーンアップタイマーを開始
+ */
+function startCleanupTimer(): void {
+  if (cleanupIntervalId) {
+    return;
+  }
+
+  cleanupIntervalId = setInterval(cleanupInactiveRooms, ROOM_CLEANUP_INTERVAL_MS);
+
+  const timeoutMinutes = Math.round(ROOM_INACTIVE_TIMEOUT_MS / 60000);
+  const intervalMinutes = Math.round(ROOM_CLEANUP_INTERVAL_MS / 60000);
+  console.log(
+    `[Server] Inactive room cleanup started (timeout: ${timeoutMinutes}min, interval: ${intervalMinutes}min)`
+  );
+}
+
+/**
+ * クリーンアップタイマーを停止
+ */
+function stopCleanupTimer(): void {
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+    console.log("[Server] Inactive room cleanup stopped");
+  }
+}
+
+// ============================================
 // サーバー起動
 // ============================================
 
@@ -993,6 +1088,9 @@ async function startServer(): Promise<void> {
       console.log(`[Server] Socket.io server running on port ${PORT}`);
       console.log(`[Server] CORS origin: ${CORS_ORIGIN}`);
     });
+
+    // 非アクティブルームのクリーンアップタイマーを開始
+    startCleanupTimer();
   } catch (error) {
     console.error("[Server] Failed to start server:", error);
     process.exit(1);
@@ -1002,6 +1100,9 @@ async function startServer(): Promise<void> {
 // グレースフルシャットダウン
 async function gracefulShutdown(): Promise<void> {
   console.log("[Server] Shutting down...");
+
+  // クリーンアップタイマーを停止
+  stopCleanupTimer();
 
   // 新しい接続を拒否
   httpServer.close();
