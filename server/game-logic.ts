@@ -1577,6 +1577,20 @@ export function handleUseDevelopmentCard(
     throw new Error("そのカードを持っていません");
   }
 
+  // 今ターン購入したカードは使用不可（勝利点カードを除く）
+  // cardsBoughtThisTurn には "playerId_timestamp_cardType" 形式で保存されている
+  const cardsBoughtThisTurnOfType = state.cardsBoughtThisTurn.filter(
+    (cardId) => cardId.endsWith(`_${cardType}`)
+  ).length;
+  const totalCardsOfType = player.developmentCards.filter(
+    (card) => card === cardType
+  ).length;
+
+  // 持っているカードがすべて今ターン購入したものなら使用不可
+  if (cardsBoughtThisTurnOfType >= totalCardsOfType) {
+    throw new Error("購入したターンには発展カードを使用できません");
+  }
+
   // 勝利点カードは使用できない
   if (cardType === "victoryPoint") {
     throw new Error("勝利点カードは使用できません");
