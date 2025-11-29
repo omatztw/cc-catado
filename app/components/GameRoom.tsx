@@ -1832,7 +1832,7 @@ export function GameRoom() {
               selectableIntersections={selectableIntersections}
               selectableEdges={selectableEdges}
               selectableHexes={selectableHexes}
-              debug={true} // TODO: デバッグ完了後に削除
+              debug={process.env.NEXT_PUBLIC_DEBUG_BOARD === "true"}
             />
           </div>
 
