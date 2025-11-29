@@ -489,35 +489,29 @@ export function GameBoard({
         {/* 港 */}
         <g id="ports">
           {(() => {
-            // 港を持つ頂点をペアにしてレンダリング
+            // 港を持つ頂点をportIdでグループ化
             const portIntersections = gameState.intersections.filter((i) => i.port);
-            const rendered = new Set<string>();
-            const portPairs: { i1: Intersection; i2: Intersection }[] = [];
+            const portGroups = new Map<string, Intersection[]>();
 
-            for (const i1 of portIntersections) {
-              if (rendered.has(i1.id)) continue;
-              // 同じ港情報を持つ隣接頂点を探す
-              const i2 = portIntersections.find(
-                (i) =>
-                  i.id !== i1.id &&
-                  !rendered.has(i.id) &&
-                  i.port?.ratio === i1.port?.ratio &&
-                  i.port?.resourceType === i1.port?.resourceType
-              );
-              if (i2) {
-                portPairs.push({ i1, i2 });
-                rendered.add(i1.id);
-                rendered.add(i2.id);
+            for (const intersection of portIntersections) {
+              const portId = intersection.port!.portId;
+              if (!portGroups.has(portId)) {
+                portGroups.set(portId, []);
               }
+              portGroups.get(portId)!.push(intersection);
             }
 
-            return portPairs.map(({ i1, i2 }) => (
-              <PortMarker
-                key={`port-${i1.id}-${i2.id}`}
-                intersection1={i1}
-                intersection2={i2}
-              />
-            ));
+            // 各港グループをレンダリング
+            return Array.from(portGroups.entries()).map(([portId, intersections]) => {
+              if (intersections.length !== 2) return null;
+              return (
+                <PortMarker
+                  key={portId}
+                  intersection1={intersections[0]}
+                  intersection2={intersections[1]}
+                />
+              );
+            });
           })()}
         </g>
 

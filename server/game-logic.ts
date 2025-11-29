@@ -103,20 +103,21 @@ const VALID_HEX_IDS = new Set(STANDARD_HEX_COORDS.map(cubeToId));
 // 港の配置（頂点IDと港情報のペア）
 // カタン標準: 4つの3:1港、5つの2:1港（各資源1つ）
 const PORT_CONFIGURATIONS: {
+  portId: string;
   vertexIds: string[];
   port: { ratio: number; resourceType: HoldableResource | null };
 }[] = [
   // 3:1 汎用港 (4箇所)
-  { vertexIds: ["0,-2,2_N", "1,-2,1_N"], port: { ratio: 3, resourceType: null } },
-  { vertexIds: ["-2,0,2_S", "-2,1,1_S"], port: { ratio: 3, resourceType: null } },
-  { vertexIds: ["2,0,-2_N", "2,-1,-1_N"], port: { ratio: 3, resourceType: null } },
-  { vertexIds: ["-1,2,-1_S", "0,2,-2_S"], port: { ratio: 3, resourceType: null } },
+  { portId: "port-1", vertexIds: ["0,-2,2_N", "1,-2,1_N"], port: { ratio: 3, resourceType: null } },
+  { portId: "port-2", vertexIds: ["-2,0,2_S", "-2,1,1_S"], port: { ratio: 3, resourceType: null } },
+  { portId: "port-3", vertexIds: ["2,0,-2_N", "2,-1,-1_N"], port: { ratio: 3, resourceType: null } },
+  { portId: "port-4", vertexIds: ["-1,2,-1_S", "0,2,-2_S"], port: { ratio: 3, resourceType: null } },
   // 2:1 専門港 (5箇所)
-  { vertexIds: ["2,-2,0_N", "2,-2,0_S"], port: { ratio: 2, resourceType: "ore" } },
-  { vertexIds: ["-2,2,0_N", "-2,2,0_S"], port: { ratio: 2, resourceType: "wheat" } },
-  { vertexIds: ["1,1,-2_N", "0,1,-1_S"], port: { ratio: 2, resourceType: "sheep" } },
-  { vertexIds: ["-1,-1,2_N", "-1,-1,2_S"], port: { ratio: 2, resourceType: "wood" } },
-  { vertexIds: ["1,-1,0_S", "0,-1,1_N"], port: { ratio: 2, resourceType: "brick" } },
+  { portId: "port-ore", vertexIds: ["2,-2,0_N", "2,-2,0_S"], port: { ratio: 2, resourceType: "ore" } },
+  { portId: "port-wheat", vertexIds: ["-2,2,0_N", "-2,2,0_S"], port: { ratio: 2, resourceType: "wheat" } },
+  { portId: "port-sheep", vertexIds: ["1,1,-2_N", "0,1,-1_S"], port: { ratio: 2, resourceType: "sheep" } },
+  { portId: "port-wood", vertexIds: ["-1,-1,2_N", "-1,-1,2_S"], port: { ratio: 2, resourceType: "wood" } },
+  { portId: "port-brick", vertexIds: ["1,-1,0_S", "0,-1,1_N"], port: { ratio: 2, resourceType: "brick" } },
 ];
 
 // 発展カードデッキの構成
@@ -382,11 +383,11 @@ function getHexEdges(hex: CubeCoordinate): EdgeCoordinate[] {
 /**
  * 港IDマップを生成
  */
-function createPortMap(): Map<string, { ratio: number; resourceType: HoldableResource | null }> {
-  const portMap = new Map<string, { ratio: number; resourceType: HoldableResource | null }>();
+function createPortMap(): Map<string, { portId: string; ratio: number; resourceType: HoldableResource | null }> {
+  const portMap = new Map<string, { portId: string; ratio: number; resourceType: HoldableResource | null }>();
   for (const config of PORT_CONFIGURATIONS) {
     for (const vertexId of config.vertexIds) {
-      portMap.set(vertexId, config.port);
+      portMap.set(vertexId, { portId: config.portId, ...config.port });
     }
   }
   return portMap;

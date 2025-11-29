@@ -116,6 +116,8 @@ export interface Edge {
  * 港（Port）
  */
 export interface Port {
+  // 港の識別ID（同じ港を共有する2つの頂点で同じID）
+  portId: string;
   // 交換レート（通常 3:1 または 2:1）
   ratio: number;
   // 特定資源用の港の場合はその資源、汎用港は null
