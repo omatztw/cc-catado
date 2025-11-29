@@ -1796,10 +1796,12 @@ export function GameRoom() {
         </div>
       </header>
 
-      {/* エラー表示 */}
+      {/* フローティングエラー通知 */}
       {error && (
-        <div className="bg-red-100 border-b border-red-400 text-red-700 px-4 py-2 text-sm text-center">
-          {error}
+        <div className="fixed top-16 left-1/2 transform -translate-x-1/2 z-50 animate-pulse">
+          <div className="bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg text-sm font-medium">
+            {error}
+          </div>
         </div>
       )}
 
