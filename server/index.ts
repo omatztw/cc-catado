@@ -44,6 +44,7 @@ import {
   addPlayerToGame,
   removePlayerFromGame,
   processGameAction,
+  resetGameState,
 } from "./game-logic";
 
 // ============================================
@@ -162,8 +163,8 @@ async function handleCreateRoom(
     const roomId = `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const playerId = uuidv4();
 
-    // 新しいゲーム状態を作成
-    let gameState = createInitialGameState(roomId);
+    // 新しいゲーム状態を作成（作成者をホストに設定）
+    let gameState = createInitialGameState(roomId, playerId);
 
     // プレイヤーを追加
     gameState = addPlayerToGame(gameState, playerId, playerName);
@@ -186,6 +187,7 @@ async function handleCreateRoom(
       status: "waiting",
       isPublic,
       hasPassword: !!password,
+      hostId: playerId,
       hostName: playerName,
       createdAt: gameState.createdAt,
     };
@@ -528,6 +530,164 @@ async function handleChatMessage(
 }
 
 /**
+ * ルーム再参加ハンドラー（再接続用）
+ */
+async function handleRejoinRoom(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: { roomId: string; playerId: string }
+): Promise<void> {
+  const { roomId, playerId } = data;
+
+  try {
+    // ゲーム状態を取得
+    const gameState = await getGameState(roomId);
+
+    if (!gameState) {
+      socket.emit("room_rejoined", {
+        success: false,
+        roomId,
+        playerId,
+        gameState: null,
+        error: "ルームが見つかりません",
+      });
+      return;
+    }
+
+    // プレイヤーが存在するか確認
+    const existingPlayer = gameState.players.find((p) => p.id === playerId);
+
+    if (!existingPlayer) {
+      socket.emit("room_rejoined", {
+        success: false,
+        roomId,
+        playerId,
+        gameState: null,
+        error: "プレイヤーが見つかりません",
+      });
+      return;
+    }
+
+    // プレイヤーを再接続状態に更新
+    const updatedGameState = {
+      ...gameState,
+      players: gameState.players.map((p) =>
+        p.id === playerId ? { ...p, isConnected: true } : p
+      ),
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Socket.ioルームに参加
+    await socket.join(roomId);
+
+    // Redis にマッピングを保存
+    await setSocketPlayerMapping(socket.id, playerId, roomId);
+
+    // ゲーム状態を保存
+    await saveGameState(roomId, updatedGameState);
+
+    // 再参加者に通知
+    socket.emit("room_rejoined", {
+      success: true,
+      roomId,
+      playerId,
+      gameState: updatedGameState,
+    });
+
+    // 他のプレイヤーに再接続を通知
+    socket.to(roomId).emit("player_reconnected", {
+      playerId,
+      playerName: existingPlayer.name,
+    });
+
+    // ルーム全体に更新された状態を送信
+    io.to(roomId).emit("update_state", { gameState: updatedGameState });
+
+    console.log(
+      `[Server] Player ${existingPlayer.name} (${playerId}) rejoined room ${roomId}`
+    );
+  } catch (error) {
+    console.error("[Server] Error in handleRejoinRoom:", error);
+    socket.emit("room_rejoined", {
+      success: false,
+      roomId,
+      playerId,
+      gameState: null,
+      error: "再接続に失敗しました",
+    });
+  }
+}
+
+/**
+ * ゲームリセットハンドラー（ホストのみ）
+ */
+async function handleResetGame(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: { roomId: string }
+): Promise<void> {
+  const { roomId } = data;
+
+  try {
+    const playerId = await getPlayerIdBySocket(socket.id);
+
+    if (!playerId) {
+      socket.emit("error", {
+        message: "プレイヤーが見つかりません",
+        code: "PLAYER_NOT_FOUND",
+      });
+      return;
+    }
+
+    // ゲーム状態を取得
+    const gameState = await getGameState(roomId);
+
+    if (!gameState) {
+      socket.emit("error", {
+        message: "ゲームが見つかりません",
+        code: "GAME_NOT_FOUND",
+      });
+      return;
+    }
+
+    // ホストかどうか確認
+    if (gameState.hostId !== playerId) {
+      socket.emit("error", {
+        message: "ゲームをリセットできるのはホストのみです",
+        code: "NOT_HOST",
+      });
+      return;
+    }
+
+    // ゲーム状態をリセット
+    const newGameState = resetGameState(gameState);
+
+    // 保存
+    await saveGameState(roomId, newGameState);
+
+    // ルーム情報を更新
+    const roomInfo = await getRoomInfo(roomId);
+    if (roomInfo) {
+      const updatedRoomInfo: RoomInfo = {
+        ...roomInfo,
+        status: "waiting",
+      };
+      await saveRoomInfo(roomId, updatedRoomInfo);
+    }
+
+    // ルーム全体にリセット通知
+    io.to(roomId).emit("game_reset", { gameState: newGameState });
+    io.to(roomId).emit("update_state", { gameState: newGameState });
+
+    console.log(`[Server] Game reset in room ${roomId} by host ${playerId}`);
+  } catch (error) {
+    console.error("[Server] Error in handleResetGame:", error);
+    socket.emit("error", {
+      message: "ゲームのリセットに失敗しました",
+      code: "RESET_FAILED",
+    });
+  }
+}
+
+/**
  * 切断ハンドラー
  */
 async function handleDisconnect(
@@ -570,10 +730,12 @@ io.on("connection", (socket) => {
   // イベントリスナーを登録
   socket.on("create_room", (data) => handleCreateRoom(socket, data));
   socket.on("join_room", (data) => handleJoinRoom(socket, data));
+  socket.on("rejoin_room", (data) => handleRejoinRoom(socket, data));
   socket.on("leave_room", (data) => handleLeaveRoom(socket, data));
   socket.on("get_public_rooms", () => handleGetPublicRooms(socket));
   socket.on("game_action", (action) => handleGameAction(socket, action));
   socket.on("chat_message", (data) => handleChatMessage(socket, data));
+  socket.on("reset_game", (data) => handleResetGame(socket, data));
   socket.on("disconnect", () => handleDisconnect(socket));
 
   // エラーハンドリング

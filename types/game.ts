@@ -225,6 +225,8 @@ export interface TradeOffer {
 export interface GameState {
   // ゲームID（ルームID）
   id: string;
+  // ホスト（ルーム作成者）のプレイヤーID
+  hostId: string;
   // ゲームフェーズ
   phase: GamePhase;
   // 六角形タイル一覧
@@ -284,6 +286,11 @@ export interface ClientToServerEvents {
     playerName: string;
     password?: string;
   }) => void;
+  // ルーム再参加（再接続用）
+  rejoin_room: (data: {
+    roomId: string;
+    playerId: string;
+  }) => void;
   // ルーム退出
   leave_room: (data: { roomId: string }) => void;
   // 公開ルーム一覧取得
@@ -292,6 +299,8 @@ export interface ClientToServerEvents {
   game_action: (data: GameAction) => void;
   // チャットメッセージ送信
   chat_message: (data: { roomId: string; message: string }) => void;
+  // ゲームリセット（ホストのみ）
+  reset_game: (data: { roomId: string }) => void;
 }
 
 /**
@@ -314,6 +323,14 @@ export interface ServerToClientEvents {
     gameState: GameState | null;
     error?: string;
   }) => void;
+  // ルーム再参加結果
+  room_rejoined: (data: {
+    success: boolean;
+    roomId: string;
+    playerId: string;
+    gameState: GameState | null;
+    error?: string;
+  }) => void;
   // 公開ルーム一覧
   public_rooms: (data: { rooms: RoomInfo[] }) => void;
   // ゲーム状態更新
@@ -322,6 +339,8 @@ export interface ServerToClientEvents {
   player_joined: (data: { player: Player }) => void;
   // プレイヤー退出通知
   player_left: (data: { playerId: string }) => void;
+  // プレイヤー再接続通知
+  player_reconnected: (data: { playerId: string; playerName: string }) => void;
   // アクション結果通知
   action_result: (data: {
     success: boolean;
@@ -335,6 +354,8 @@ export interface ServerToClientEvents {
     message: string;
     timestamp: string;
   }) => void;
+  // ゲームリセット通知
+  game_reset: (data: { gameState: GameState }) => void;
   // エラー通知
   error: (data: { message: string; code: string }) => void;
 }
@@ -443,6 +464,7 @@ export interface RoomInfo {
   status: "waiting" | "playing" | "finished";
   isPublic: boolean;
   hasPassword: boolean;
+  hostId: string;
   hostName: string;
   createdAt: string;
 }
