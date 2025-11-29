@@ -636,7 +636,14 @@ function PlayerPanel({
           {isSelf && " (あなた)"}
         </span>
         <span className="text-sm text-gray-600">
-          VP: {player.visibleVictoryPoints}
+          VP: {isSelf
+            ? player.visibleVictoryPoints + player.developmentCards.filter(c => c === "victoryPoint").length
+            : player.visibleVictoryPoints}
+          {isSelf && player.developmentCards.filter(c => c === "victoryPoint").length > 0 && (
+            <span className="text-xs text-purple-600 ml-1" title="勝利点カード（非公開）">
+              (+{player.developmentCards.filter(c => c === "victoryPoint").length})
+            </span>
+          )}
         </span>
       </div>
 

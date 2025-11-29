@@ -1733,11 +1733,7 @@ export function handleBuyDevelopmentCard(
         sheep: p.resources.sheep - 1,
       },
       developmentCards: [...p.developmentCards, drawnCard],
-      // 勝利点カードは即座に加算
-      visibleVictoryPoints:
-        drawnCard === "victoryPoint"
-          ? p.visibleVictoryPoints + 1
-          : p.visibleVictoryPoints,
+      // 勝利点カードは隠し持つので visibleVictoryPoints には加算しない
     };
   });
 
@@ -2267,7 +2263,13 @@ export function handleRespondToTrade(
  */
 function checkVictoryCondition(state: GameState): GameState {
   for (const player of state.players) {
-    if (player.visibleVictoryPoints >= 10) {
+    // 勝利点カードは隠し持っているので、実際のVPは visibleVictoryPoints + VP cards
+    const vpFromCards = player.developmentCards.filter(
+      (card) => card === "victoryPoint"
+    ).length;
+    const totalVP = player.visibleVictoryPoints + vpFromCards;
+
+    if (totalVP >= 10) {
       return {
         ...state,
         phase: "game_over",
