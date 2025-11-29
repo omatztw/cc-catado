@@ -207,23 +207,24 @@ function isValidIntersection(vertex: VertexCoordinate): boolean {
 function getAdjacentVertices(vertex: VertexCoordinate): VertexCoordinate[] {
   const { hex, direction } = vertex;
   if (direction === "N") {
+    // N頂点（六角形の上）に隣接する3つの頂点
     return [
-      // 北東
+      // 右上コーナー（NE隣の下）
       { hex: { q: hex.q + 1, r: hex.r - 1, s: hex.s }, direction: "S" },
-      // 北西
+      // 左上コーナー（NW隣の下）
       { hex: { q: hex.q, r: hex.r - 1, s: hex.s + 1 }, direction: "S" },
-      // 南（同じ六角形）
-      { hex, direction: "S" },
+      // NE隣とNW隣が共有する頂点（さらに上の頂点）
+      { hex: { q: hex.q + 1, r: hex.r - 2, s: hex.s + 1 }, direction: "S" },
     ];
   } else {
-    // S
+    // S頂点（六角形の下）に隣接する3つの頂点
     return [
-      // 南東
+      // 右下コーナー（SE隣の上）
       { hex: { q: hex.q, r: hex.r + 1, s: hex.s - 1 }, direction: "N" },
-      // 南西
+      // 左下コーナー（SW隣の上）
       { hex: { q: hex.q - 1, r: hex.r + 1, s: hex.s }, direction: "N" },
-      // 北（同じ六角形）
-      { hex, direction: "N" },
+      // SE隣とSW隣が共有する頂点（さらに下の頂点）
+      { hex: { q: hex.q - 1, r: hex.r + 2, s: hex.s - 1 }, direction: "N" },
     ];
   }
 }
@@ -256,18 +257,21 @@ function getAdjacentVerticesForEdge(edge: EdgeCoordinate): VertexCoordinate[] {
   const { hex, direction } = edge;
   switch (direction) {
     case "NE":
+      // NE辺: N頂点（上）から右上コーナー（NE隣のS）へ
       return [
         { hex, direction: "N" },
         { hex: { q: hex.q + 1, r: hex.r - 1, s: hex.s }, direction: "S" },
       ];
     case "E":
+      // E辺: 右上コーナー（NE隣のS）から右下コーナー（SE隣のN）へ
       return [
         { hex: { q: hex.q + 1, r: hex.r - 1, s: hex.s }, direction: "S" },
-        { hex: { q: hex.q + 1, r: hex.r, s: hex.s - 1 }, direction: "N" },
+        { hex: { q: hex.q, r: hex.r + 1, s: hex.s - 1 }, direction: "N" },
       ];
     case "SE":
+      // SE辺: 右下コーナー（SE隣のN）からS頂点（下）へ
       return [
-        { hex: { q: hex.q + 1, r: hex.r, s: hex.s - 1 }, direction: "N" },
+        { hex: { q: hex.q, r: hex.r + 1, s: hex.s - 1 }, direction: "N" },
         { hex, direction: "S" },
       ];
     default:
@@ -343,13 +347,21 @@ function generateHexes(): Hex[] {
  * 六角形に隣接する頂点座標を取得
  */
 function getHexVertices(hex: CubeCoordinate): VertexCoordinate[] {
+  // pointy-top六角形の6つの頂点を正しく取得
+  // 各頂点は (hex座標, N/S方向) で一意に表現される
   return [
+    // 上 (Top)
     { hex, direction: "N" },
+    // 下 (Bottom)
     { hex, direction: "S" },
+    // 右上 (Upper-right): NE隣の下
     { hex: { q: hex.q + 1, r: hex.r - 1, s: hex.s }, direction: "S" },
-    { hex: { q: hex.q + 1, r: hex.r, s: hex.s - 1 }, direction: "N" },
+    // 右下 (Lower-right): SE隣の上
     { hex: { q: hex.q, r: hex.r + 1, s: hex.s - 1 }, direction: "N" },
+    // 左下 (Lower-left): SW隣の上
     { hex: { q: hex.q - 1, r: hex.r + 1, s: hex.s }, direction: "N" },
+    // 左上 (Upper-left): NW隣の下
+    { hex: { q: hex.q, r: hex.r - 1, s: hex.s + 1 }, direction: "S" },
   ];
 }
 
@@ -865,17 +877,37 @@ export function handleBuildRoad(
 
   if (isSetupPhase) {
     // 初期配置フェーズでは、直前に配置した開拓地に隣接している必要がある
-    // プレイヤーの開拓地数から何個目の配置かを判定
-    const playerSettlementCount = 5 - player.remainingPieces.settlements;
 
-    // プレイヤーの開拓地を取得（最後に配置したものを特定）
+    // プレイヤーの開拓地を取得
     const playerSettlements = state.intersections.filter(
       (i) => i.building?.playerId === playerId && i.building.type === "settlement"
     );
 
-    // 最後に配置した開拓地（setup_road_1なら1つ目、setup_road_2なら2つ目）
-    const targetSettlementIndex = state.phase === "setup_road_1" ? 0 : 1;
-    const targetSettlement = playerSettlements[targetSettlementIndex];
+    let targetSettlement: Intersection | undefined;
+
+    if (state.phase === "setup_road_1") {
+      // setup_road_1 では開拓地は1つしかないはず
+      targetSettlement = playerSettlements[0];
+    } else {
+      // setup_road_2 では、まだ隣接する道がない開拓地を探す
+      // （1つ目の開拓地には既にsetup_road_1で道が建設されているはず）
+      targetSettlement = playerSettlements.find((settlement) => {
+        const settlementCoord = parseVertexId(settlement.id);
+        if (!settlementCoord) return false;
+
+        // この開拓地に隣接する辺を取得
+        const adjacentEdgeIds = getAdjacentEdgesForVertex(settlementCoord).map(edgeToId);
+
+        // 隣接する辺にプレイヤーの道がないか確認
+        const hasAdjacentRoad = adjacentEdgeIds.some((adjEdgeId) => {
+          const adjEdge = state.edges.find((e) => e.id === adjEdgeId);
+          return adjEdge?.road?.playerId === playerId;
+        });
+
+        // 道がない = 2番目に配置した開拓地
+        return !hasAdjacentRoad;
+      });
+    }
 
     if (!targetSettlement) {
       throw new Error("開拓地が見つかりません");
@@ -1855,10 +1887,10 @@ export function handleRespondToTrade(
     throw new Error("既に応答済みです");
   }
 
-  // 応答を記録
-  const updatedResponses = {
+  // 応答を記録（accept → accepted, reject → rejected に変換）
+  const updatedResponses: Record<string, "pending" | "accepted" | "rejected"> = {
     ...tradeOffer.responses,
-    [playerId]: response,
+    [playerId]: response === "accept" ? "accepted" : "rejected",
   };
 
   // 受諾の場合、交易を実行
