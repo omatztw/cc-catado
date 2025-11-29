@@ -5,8 +5,11 @@
  * ゲームボード、プレイヤーパネル、チャット、アクションボタンを統合
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useGameSocket, useCurrentPlayer, useIsMyTurn, SessionInfo } from "../hooks/useGameSocket";
+import { useSound } from "../hooks/useSound";
+import { useNotification } from "../hooks/useNotification";
+import { useGameSettings } from "../hooks/useGameSettings";
 import { GameBoard } from "./GameBoard";
 import type {
   GameState,
@@ -1616,6 +1619,57 @@ export function GameRoom() {
     clearSavedSession,
   } = useGameSocket();
 
+  // ゲーム設定（効果音・通知）
+  const { settings, toggleSound, toggleNotification } = useGameSettings();
+  const { playSound } = useSound(settings.soundEnabled);
+  const { notifyTurn, requestPermission, permission, isSupported: isNotificationSupported } = useNotification(settings.notificationEnabled);
+
+  // 前回のゲーム状態を追跡（変更検知用）
+  const prevGameStateRef = useRef<GameState | null>(null);
+  const prevCurrentPlayerIdRef = useRef<string | null>(null);
+
+  // ゲームイベントに応じて効果音・通知を発動
+  useEffect(() => {
+    if (!gameState || !playerId) return;
+
+    const prevState = prevGameStateRef.current;
+    const prevCurrentPlayerId = prevCurrentPlayerIdRef.current;
+
+    // ターンが自分に変わった時
+    if (
+      gameState.currentPlayerId === playerId &&
+      prevCurrentPlayerId !== playerId &&
+      prevCurrentPlayerId !== null
+    ) {
+      playSound("turnStart");
+      notifyTurn();
+    }
+
+    // サイコロが振られた時
+    if (
+      gameState.diceResult &&
+      (!prevState?.diceResult ||
+        prevState.diceResult.die1 !== gameState.diceResult.die1 ||
+        prevState.diceResult.die2 !== gameState.diceResult.die2)
+    ) {
+      playSound("diceRoll");
+    }
+
+    // 盗賊が移動した時（7が出た時など）
+    if (prevState && gameState.phase === "robber_move" && prevState.phase !== "robber_move") {
+      playSound("robber");
+    }
+
+    // 勝者が決まった時
+    if (gameState.winnerId && !prevState?.winnerId) {
+      playSound("victory");
+    }
+
+    // 状態を更新
+    prevGameStateRef.current = gameState;
+    prevCurrentPlayerIdRef.current = gameState.currentPlayerId;
+  }, [gameState, playerId, playSound, notifyTurn]);
+
   // 選択可能な要素
   const selectableIntersections = useMemo(() => {
     if (!gameState || !playerId) return [];
@@ -1701,6 +1755,7 @@ export function GameRoom() {
         phase === "setup_settlement_1" ||
         phase === "setup_settlement_2"
       ) {
+        playSound("build");
         sendAction({ type: "build_settlement", intersectionId } as Omit<GameAction, "roomId">);
       } else if (phase === "main") {
         // 自分の開拓地をクリックしたら都市化
@@ -1708,14 +1763,16 @@ export function GameRoom() {
           intersection?.building?.playerId === playerId &&
           intersection.building.type === "settlement"
         ) {
+          playSound("build");
           sendAction({ type: "build_city", intersectionId } as Omit<GameAction, "roomId">);
         } else {
           // 空の頂点なら開拓地建設
+          playSound("build");
           sendAction({ type: "build_settlement", intersectionId } as Omit<GameAction, "roomId">);
         }
       }
     },
-    [gameState, playerId, sendAction]
+    [gameState, playerId, sendAction, playSound]
   );
 
   const handleEdgeClick = useCallback(
@@ -1728,10 +1785,11 @@ export function GameRoom() {
         phase === "setup_road_2" ||
         phase === "main"
       ) {
+        playSound("build");
         sendAction({ type: "build_road", edgeId } as Omit<GameAction, "roomId">);
       }
     },
-    [gameState, playerId, sendAction]
+    [gameState, playerId, sendAction, playSound]
   );
 
   const handleHexClick = useCallback(
@@ -1739,10 +1797,11 @@ export function GameRoom() {
       if (!gameState || !playerId) return;
 
       if (gameState.phase === "robber_move") {
+        playSound("robber");
         sendAction({ type: "move_robber", hexId } as Omit<GameAction, "roomId">);
       }
     },
-    [gameState, playerId, sendAction]
+    [gameState, playerId, sendAction, playSound]
   );
 
   // ゲーム状態がない場合はロビー画面を表示
@@ -1774,6 +1833,47 @@ export function GameRoom() {
             <span className="text-sm opacity-80">
               ルーム: {gameState.id}
             </span>
+            {/* 設定ボタン */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={toggleSound}
+                className={`px-2 py-1 rounded text-sm transition ${
+                  settings.soundEnabled
+                    ? "bg-green-600 hover:bg-green-700"
+                    : "bg-gray-600 hover:bg-gray-700"
+                }`}
+                title={settings.soundEnabled ? "効果音: ON" : "効果音: OFF"}
+              >
+                {settings.soundEnabled ? "🔊" : "🔇"}
+              </button>
+              <button
+                onClick={() => {
+                  if (!settings.notificationEnabled && permission !== "granted") {
+                    requestPermission().then((granted) => {
+                      if (granted) toggleNotification();
+                    });
+                  } else {
+                    toggleNotification();
+                  }
+                }}
+                className={`px-2 py-1 rounded text-sm transition ${
+                  settings.notificationEnabled && permission === "granted"
+                    ? "bg-green-600 hover:bg-green-700"
+                    : "bg-gray-600 hover:bg-gray-700"
+                }`}
+                title={
+                  !isNotificationSupported
+                    ? "通知非対応"
+                    : permission !== "granted"
+                    ? "通知許可が必要"
+                    : settings.notificationEnabled
+                    ? "通知: ON"
+                    : "通知: OFF"
+                }
+              >
+                {settings.notificationEnabled && permission === "granted" ? "🔔" : "🔕"}
+              </button>
+            </div>
             {gameState.hostId === playerId && gameState.phase !== "waiting" && gameState.phase !== "game_over" && (
               <button
                 onClick={() => {
