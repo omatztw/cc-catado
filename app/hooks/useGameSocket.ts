@@ -31,6 +31,14 @@ export interface UseGameSocketOptions {
   autoConnect?: boolean;
 }
 
+/** セッション情報（localStorage保存用） */
+export interface SessionInfo {
+  roomId: string;
+  playerId: string;
+  playerName: string;
+  timestamp: number;
+}
+
 export interface UseGameSocketReturn {
   /** ソケットの接続状態 */
   isConnected: boolean;
@@ -46,6 +54,8 @@ export interface UseGameSocketReturn {
   chatMessages: ChatMessage[];
   /** 公開ルーム一覧 */
   publicRooms: RoomInfo[];
+  /** 保存されたセッション情報 */
+  savedSession: SessionInfo | null;
   /** ルームを作成 */
   createRoom: (data: {
     playerName: string;
@@ -55,6 +65,8 @@ export interface UseGameSocketReturn {
   }) => void;
   /** ルームに参加 */
   joinRoom: (roomId: string, playerName: string, password?: string) => void;
+  /** ルームに再参加（再接続用） */
+  rejoinRoom: (roomId: string, playerId: string) => void;
   /** ルームから退出 */
   leaveRoom: () => void;
   /** 公開ルーム一覧を取得 */
@@ -63,8 +75,12 @@ export interface UseGameSocketReturn {
   sendAction: (action: Omit<GameAction, "roomId">) => void;
   /** チャットメッセージを送信 */
   sendChatMessage: (message: string) => void;
+  /** ゲームをリセット（ホストのみ） */
+  resetGame: () => void;
   /** 接続を再試行 */
   reconnect: () => void;
+  /** 保存されたセッションをクリア */
+  clearSavedSession: () => void;
 }
 
 // ============================================
@@ -73,6 +89,45 @@ export interface UseGameSocketReturn {
 
 const DEFAULT_SERVER_URL =
   process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
+
+const SESSION_STORAGE_KEY = "catado_session";
+const SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24時間
+
+// ============================================
+// セッション管理ヘルパー
+// ============================================
+
+function saveSession(session: SessionInfo): void {
+  if (typeof window !== "undefined") {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  }
+}
+
+function loadSession(): SessionInfo | null {
+  if (typeof window === "undefined") return null;
+
+  const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!stored) return null;
+
+  try {
+    const session = JSON.parse(stored) as SessionInfo;
+    // 有効期限チェック
+    if (Date.now() - session.timestamp > SESSION_EXPIRY_MS) {
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
+    return session;
+  } catch {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    return null;
+  }
+}
+
+function clearSession(): void {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  }
+}
 
 // ============================================
 // カスタムフック
@@ -94,10 +149,18 @@ export function useGameSocket(
   const [error, setError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [publicRooms, setPublicRooms] = useState<RoomInfo[]>([]);
+  const [savedSession, setSavedSession] = useState<SessionInfo | null>(null);
 
   // Ref でソケットインスタンスと現在のルームIDを保持
   const socketRef = useRef<GameSocket | null>(null);
   const roomIdRef = useRef<string | null>(null);
+  const playerNameRef = useRef<string | null>(null);
+
+  // 初回マウント時にセッション情報を読み込み
+  useEffect(() => {
+    const session = loadSession();
+    setSavedSession(session);
+  }, []);
 
   // ============================================
   // ソケット接続の初期化
@@ -155,11 +218,21 @@ export function useGameSocket(
     socket.on("room_created", (data) => {
       console.log("[useGameSocket] Room created:", data);
 
-      if (data.success) {
+      if (data.success && data.gameState) {
         setPlayerId(data.playerId);
         setGameState(data.gameState);
         roomIdRef.current = data.roomId;
         setError(null);
+        // セッション情報を保存
+        const playerName = data.gameState.players.find(p => p.id === data.playerId)?.name || "";
+        playerNameRef.current = playerName;
+        saveSession({
+          roomId: data.roomId,
+          playerId: data.playerId,
+          playerName,
+          timestamp: Date.now(),
+        });
+        setSavedSession(null); // 新規作成なので古いセッションはクリア
       } else {
         setError(data.error || "ルームの作成に失敗しました");
       }
@@ -168,14 +241,59 @@ export function useGameSocket(
     socket.on("room_joined", (data) => {
       console.log("[useGameSocket] Room joined:", data);
 
-      if (data.success) {
+      if (data.success && data.gameState) {
         setPlayerId(data.playerId);
         setGameState(data.gameState);
         roomIdRef.current = data.roomId;
         setError(null);
+        // セッション情報を保存
+        const playerName = data.gameState.players.find(p => p.id === data.playerId)?.name || "";
+        playerNameRef.current = playerName;
+        saveSession({
+          roomId: data.roomId,
+          playerId: data.playerId,
+          playerName,
+          timestamp: Date.now(),
+        });
+        setSavedSession(null); // 参加成功したので古いセッションはクリア
       } else {
         setError(data.error || "ルームへの参加に失敗しました");
       }
+    });
+
+    socket.on("room_rejoined", (data) => {
+      console.log("[useGameSocket] Room rejoined:", data);
+
+      if (data.success && data.gameState) {
+        setPlayerId(data.playerId);
+        setGameState(data.gameState);
+        roomIdRef.current = data.roomId;
+        setError(null);
+        // セッション情報を更新
+        const playerName = data.gameState.players.find(p => p.id === data.playerId)?.name || "";
+        playerNameRef.current = playerName;
+        saveSession({
+          roomId: data.roomId,
+          playerId: data.playerId,
+          playerName,
+          timestamp: Date.now(),
+        });
+        setSavedSession(null); // 再接続成功したのでセッション表示をクリア
+      } else {
+        setError(data.error || "ルームへの再接続に失敗しました");
+        // 再接続失敗したらセッション情報をクリア
+        clearSession();
+        setSavedSession(null);
+      }
+    });
+
+    socket.on("player_reconnected", (data) => {
+      console.log("[useGameSocket] Player reconnected:", data.playerName);
+    });
+
+    socket.on("game_reset", (data) => {
+      console.log("[useGameSocket] Game reset");
+      setGameState(data.gameState);
     });
 
     socket.on("public_rooms", (data) => {
@@ -276,6 +394,24 @@ export function useGameSocket(
   );
 
   /**
+   * ルームに再参加（再接続用）
+   */
+  const rejoinRoom = useCallback(
+    (roomId: string, savedPlayerId: string) => {
+      const socket = initializeSocket();
+
+      if (!socket.connected) {
+        socket.once("connect", () => {
+          socket.emit("rejoin_room", { roomId, playerId: savedPlayerId });
+        });
+      } else {
+        socket.emit("rejoin_room", { roomId, playerId: savedPlayerId });
+      }
+    },
+    [initializeSocket]
+  );
+
+  /**
    * ルームから退出
    */
   const leaveRoom = useCallback(() => {
@@ -288,6 +424,10 @@ export function useGameSocket(
     setPlayerId(null);
     setChatMessages([]);
     roomIdRef.current = null;
+    playerNameRef.current = null;
+    // セッション情報をクリア
+    clearSession();
+    setSavedSession(null);
   }, []);
 
   /**
@@ -340,6 +480,26 @@ export function useGameSocket(
   }, []);
 
   /**
+   * ゲームをリセット（ホストのみ）
+   */
+  const resetGame = useCallback(() => {
+    if (!socketRef.current || !roomIdRef.current) {
+      setError("サーバーに接続されていません");
+      return;
+    }
+
+    socketRef.current.emit("reset_game", { roomId: roomIdRef.current });
+  }, []);
+
+  /**
+   * 保存されたセッションをクリア
+   */
+  const clearSavedSession = useCallback(() => {
+    clearSession();
+    setSavedSession(null);
+  }, []);
+
+  /**
    * 接続を再試行
    */
   const reconnect = useCallback(() => {
@@ -383,13 +543,17 @@ export function useGameSocket(
     error,
     chatMessages,
     publicRooms,
+    savedSession,
     createRoom,
     joinRoom,
+    rejoinRoom,
     leaveRoom,
     fetchPublicRooms,
     sendAction,
     sendChatMessage,
+    resetGame,
     reconnect,
+    clearSavedSession,
   };
 }
 

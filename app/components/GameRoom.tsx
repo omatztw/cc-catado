@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useCallback, useMemo, useEffect } from "react";
-import { useGameSocket, useCurrentPlayer, useIsMyTurn } from "../hooks/useGameSocket";
+import { useGameSocket, useCurrentPlayer, useIsMyTurn, SessionInfo } from "../hooks/useGameSocket";
 import { GameBoard } from "./GameBoard";
 import type {
   GameState,
@@ -332,7 +332,10 @@ function Lobby({
   onCreateRoom,
   onJoinRoom,
   onJoinPrivateRoom,
+  onRejoinRoom,
   onRefreshRooms,
+  savedSession,
+  onClearSavedSession,
   error,
   isConnecting,
 }: {
@@ -345,7 +348,10 @@ function Lobby({
   }) => void;
   onJoinRoom: (roomId: string, playerName: string, password?: string) => void;
   onJoinPrivateRoom: (roomId: string, playerName: string, password?: string) => void;
+  onRejoinRoom: (roomId: string, playerId: string) => void;
   onRefreshRooms: () => void;
+  savedSession: SessionInfo | null;
+  onClearSavedSession: () => void;
   error: string | null;
   isConnecting: boolean;
 }) {
@@ -429,6 +435,37 @@ function Lobby({
           {error && (
             <div className="bg-red-100 border-b border-red-400 text-red-700 px-6 py-3 text-sm">
               {error}
+            </div>
+          )}
+
+          {/* 再接続バナー */}
+          {savedSession && (
+            <div className="bg-yellow-50 border-b border-yellow-300 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-yellow-800">
+                    前回のゲームセッションが見つかりました
+                  </p>
+                  <p className="text-xs text-yellow-700 mt-1">
+                    ルーム: {savedSession.roomId} / プレイヤー: {savedSession.playerName}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onRejoinRoom(savedSession.roomId, savedSession.playerId)}
+                    disabled={isConnecting}
+                    className="px-4 py-2 bg-yellow-600 text-white text-sm rounded-lg font-medium hover:bg-yellow-700 disabled:bg-gray-400 transition"
+                  >
+                    {isConnecting ? "接続中..." : "再接続"}
+                  </button>
+                  <button
+                    onClick={onClearSavedSession}
+                    className="px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -682,14 +719,17 @@ function ActionPanel({
   gameState,
   playerId,
   onAction,
+  onResetGame,
 }: {
   gameState: GameState;
   playerId: string;
   onAction: (action: Omit<GameAction, "roomId">) => void;
+  onResetGame: () => void;
 }) {
   const isMyTurn = gameState.currentPlayerId === playerId;
   const phase = gameState.phase;
   const currentPlayer = gameState.players.find((p) => p.id === playerId);
+  const isHost = gameState.hostId === playerId;
 
   // 資源破棄用のstate
   const [discardResources, setDiscardResources] = useState<
@@ -896,6 +936,11 @@ function ActionPanel({
             ゲームを開始するには3人以上必要です
           </p>
         )}
+        {isHost && (
+          <p className="text-xs text-blue-600 mt-2">
+            あなたはこのルームのホストです
+          </p>
+        )}
       </div>
     );
   }
@@ -909,8 +954,21 @@ function ActionPanel({
       <div className="bg-white rounded-lg shadow p-4 text-center">
         <h3 className="text-xl font-bold text-yellow-600 mb-2">ゲーム終了</h3>
         {winner && (
-          <p className="text-lg">
+          <p className="text-lg mb-4">
             勝者: <span className="font-semibold">{winner.name}</span>
+          </p>
+        )}
+        {isHost && (
+          <button
+            onClick={onResetGame}
+            className="w-full py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition"
+          >
+            新しいゲームを始める
+          </button>
+        )}
+        {!isHost && (
+          <p className="text-xs text-gray-500 mt-2">
+            ホストがゲームをリセットするのを待っています
           </p>
         )}
       </div>
@@ -1546,12 +1604,16 @@ export function GameRoom() {
     error,
     chatMessages,
     publicRooms,
+    savedSession,
     createRoom,
     joinRoom,
+    rejoinRoom,
     leaveRoom,
     fetchPublicRooms,
     sendAction,
     sendChatMessage,
+    resetGame,
+    clearSavedSession,
   } = useGameSocket();
 
   // 選択可能な要素
@@ -1691,7 +1753,10 @@ export function GameRoom() {
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
         onJoinPrivateRoom={joinRoom}
+        onRejoinRoom={rejoinRoom}
         onRefreshRooms={fetchPublicRooms}
+        savedSession={savedSession}
+        onClearSavedSession={clearSavedSession}
         error={error}
         isConnecting={isConnecting}
       />
@@ -1709,6 +1774,18 @@ export function GameRoom() {
             <span className="text-sm opacity-80">
               ルーム: {gameState.id}
             </span>
+            {gameState.hostId === playerId && gameState.phase !== "waiting" && gameState.phase !== "game_over" && (
+              <button
+                onClick={() => {
+                  if (window.confirm("ゲームをリセットしますか？全員の進行状況がクリアされます。")) {
+                    resetGame();
+                  }
+                }}
+                className="px-3 py-1 bg-yellow-600 rounded text-sm hover:bg-yellow-700 transition"
+              >
+                リセット
+              </button>
+            )}
             <button
               onClick={leaveRoom}
               className="px-3 py-1 bg-red-600 rounded text-sm hover:bg-red-700 transition"
@@ -1763,6 +1840,7 @@ export function GameRoom() {
                 gameState={gameState}
                 playerId={playerId}
                 onAction={sendAction}
+                onResetGame={resetGame}
               />
             )}
             <ChatPanel

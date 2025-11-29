@@ -449,7 +449,7 @@ function generateEdges(hexes: Hex[]): Edge[] {
 /**
  * 新しいゲーム状態を作成
  */
-export function createInitialGameState(roomId: string): GameState {
+export function createInitialGameState(roomId: string, hostId: string): GameState {
   const hexes = generateHexes();
   const intersections = generateIntersections(hexes);
   const edges = generateEdges(hexes);
@@ -457,6 +457,7 @@ export function createInitialGameState(roomId: string): GameState {
 
   return {
     id: roomId,
+    hostId,
     phase: "waiting",
     hexes,
     intersections,
@@ -474,6 +475,55 @@ export function createInitialGameState(roomId: string): GameState {
     largestArmyPlayerId: null,
     winnerId: null,
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * ゲーム状態をリセットする（hostIdと既存プレイヤーを維持）
+ */
+export function resetGameState(state: GameState): GameState {
+  const hexes = generateHexes();
+  const intersections = generateIntersections(hexes);
+  const edges = generateEdges(hexes);
+  const developmentCardDeck = shuffle([...DEVELOPMENT_CARD_DECK]);
+
+  // プレイヤーの状態をリセット
+  const resetPlayers = state.players.map((player) => ({
+    ...player,
+    resources: { wood: 0, brick: 0, wheat: 0, ore: 0, sheep: 0 },
+    developmentCards: [],
+    knightsPlayed: 0,
+    hasLongestRoad: false,
+    hasLargestArmy: false,
+    visibleVictoryPoints: 0,
+    remainingPieces: {
+      settlements: 5,
+      cities: 4,
+      roads: 15,
+    },
+  }));
+
+  return {
+    id: state.id,
+    hostId: state.hostId,
+    phase: "waiting",
+    hexes,
+    intersections,
+    edges,
+    players: resetPlayers,
+    currentPlayerId: null,
+    turnOrder: [],
+    turnNumber: 0,
+    diceResult: null,
+    activeTradeOffer: null,
+    developmentCardDeck,
+    developmentCardDeckCount: developmentCardDeck.length,
+    cardsBoughtThisTurn: [],
+    longestRoadPlayerId: null,
+    largestArmyPlayerId: null,
+    winnerId: null,
+    createdAt: state.createdAt,
     updatedAt: new Date().toISOString(),
   };
 }
