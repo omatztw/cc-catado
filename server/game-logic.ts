@@ -850,7 +850,7 @@ export function handleBuildSettlement(
   );
 
   // プレイヤーを更新
-  const updatedPlayers = state.players.map((p) => {
+  let updatedPlayers = state.players.map((p) => {
     if (p.id !== playerId) return p;
 
     let updatedResources = { ...p.resources };
@@ -874,6 +874,29 @@ export function handleBuildSettlement(
       visibleVictoryPoints: p.visibleVictoryPoints + 1,
     };
   });
+
+  // 初期配置の2番目の開拓地では隣接する資源を獲得
+  if (state.phase === "setup_settlement_2") {
+    const adjacentHexes = getAdjacentHexesForVertex(vertex);
+    const resourcesToGain: Partial<Record<HoldableResource, number>> = {};
+
+    for (const hexCoord of adjacentHexes) {
+      const hex = state.hexes.find((h) => h.id === cubeToId(hexCoord));
+      if (hex && hex.resourceType !== "desert") {
+        const resource = hex.resourceType as HoldableResource;
+        resourcesToGain[resource] = (resourcesToGain[resource] || 0) + 1;
+      }
+    }
+
+    updatedPlayers = updatedPlayers.map((p) => {
+      if (p.id !== playerId) return p;
+      const newResources = { ...p.resources };
+      for (const [resource, amount] of Object.entries(resourcesToGain)) {
+        newResources[resource as HoldableResource] += amount as number;
+      }
+      return { ...p, resources: newResources };
+    });
+  }
 
   // フェーズ更新
   let nextPhase = state.phase;
