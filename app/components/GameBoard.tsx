@@ -203,53 +203,83 @@ function HexTile({
 
 /**
  * 港マーカーコンポーネント
+ * 港は2つの頂点をつなぐので、ペアで表示する
  */
 function PortMarker({
-  intersection,
+  intersection1,
+  intersection2,
 }: {
-  intersection: Intersection;
+  intersection1: Intersection;
+  intersection2: Intersection;
 }) {
-  if (!intersection.port) return null;
+  const port = intersection1.port;
+  if (!port) return null;
 
-  const { x, y } = getVertexPixel(
-    intersection.coordinate.hex,
-    intersection.coordinate.direction
+  const pos1 = getVertexPixel(
+    intersection1.coordinate.hex,
+    intersection1.coordinate.direction
+  );
+  const pos2 = getVertexPixel(
+    intersection2.coordinate.hex,
+    intersection2.coordinate.direction
   );
 
+  // 2つの頂点の中点を計算
+  const midX = (pos1.x + pos2.x) / 2;
+  const midY = (pos1.y + pos2.y) / 2;
+
   // 港をボードの外側に向かってオフセット
-  // 中心からの方向を計算
-  const dx = x - BOARD_CENTER_X;
-  const dy = y - BOARD_CENTER_Y;
+  const dx = midX - BOARD_CENTER_X;
+  const dy = midY - BOARD_CENTER_Y;
   const distance = Math.sqrt(dx * dx + dy * dy);
-  const offsetX = (dx / distance) * 30;
-  const offsetY = (dy / distance) * 30;
+  const offsetX = (dx / distance) * 40;
+  const offsetY = (dy / distance) * 40;
 
-  const portX = x + offsetX;
-  const portY = y + offsetY;
+  const portX = midX + offsetX;
+  const portY = midY + offsetY;
 
-  const isSpecialPort = intersection.port.resourceType !== null;
+  const isSpecialPort = port.resourceType !== null;
   const icon = isSpecialPort
-    ? PORT_ICONS[intersection.port.resourceType!]
+    ? PORT_ICONS[port.resourceType!]
     : PORT_ICONS.any;
-  const ratio = intersection.port.ratio;
+  const ratio = port.ratio;
 
   return (
     <g>
+      {/* 頂点との接続線 */}
+      <line
+        x1={pos1.x}
+        y1={pos1.y}
+        x2={portX}
+        y2={portY}
+        stroke="#8B4513"
+        strokeWidth="2"
+        strokeDasharray="4"
+      />
+      <line
+        x1={pos2.x}
+        y1={pos2.y}
+        x2={portX}
+        y2={portY}
+        stroke="#8B4513"
+        strokeWidth="2"
+        strokeDasharray="4"
+      />
       {/* 港の背景 */}
       <circle
         cx={portX}
         cy={portY}
-        r={16}
+        r={18}
         fill={isSpecialPort ? "#FEF3C7" : "#E5E7EB"}
-        stroke="#4A5568"
-        strokeWidth="1"
+        stroke="#8B4513"
+        strokeWidth="2"
       />
       {/* 比率 */}
       <text
         x={portX}
         y={portY - 3}
         textAnchor="middle"
-        fontSize="8"
+        fontSize="9"
         fontWeight="bold"
         fill="#1F2937"
       >
@@ -258,9 +288,9 @@ function PortMarker({
       {/* アイコン */}
       <text
         x={portX}
-        y={portY + 9}
+        y={portY + 10}
         textAnchor="middle"
-        fontSize="10"
+        fontSize="11"
       >
         {icon}
       </text>
@@ -458,14 +488,37 @@ export function GameBoard({
 
         {/* 港 */}
         <g id="ports">
-          {gameState.intersections
-            .filter((i) => i.port)
-            .map((intersection) => (
+          {(() => {
+            // 港を持つ頂点をペアにしてレンダリング
+            const portIntersections = gameState.intersections.filter((i) => i.port);
+            const rendered = new Set<string>();
+            const portPairs: { i1: Intersection; i2: Intersection }[] = [];
+
+            for (const i1 of portIntersections) {
+              if (rendered.has(i1.id)) continue;
+              // 同じ港情報を持つ隣接頂点を探す
+              const i2 = portIntersections.find(
+                (i) =>
+                  i.id !== i1.id &&
+                  !rendered.has(i.id) &&
+                  i.port?.ratio === i1.port?.ratio &&
+                  i.port?.resourceType === i1.port?.resourceType
+              );
+              if (i2) {
+                portPairs.push({ i1, i2 });
+                rendered.add(i1.id);
+                rendered.add(i2.id);
+              }
+            }
+
+            return portPairs.map(({ i1, i2 }) => (
               <PortMarker
-                key={`port-${intersection.id}`}
-                intersection={intersection}
+                key={`port-${i1.id}-${i2.id}`}
+                intersection1={i1}
+                intersection2={i2}
               />
-            ))}
+            ));
+          })()}
         </g>
 
         {/* 六角形タイル */}
