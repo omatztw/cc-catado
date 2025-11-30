@@ -71,6 +71,8 @@ const PHASE_LABELS: Record<GamePhase, string> = {
   robber_steal: "資源を奪う",
   discard: "資源を破棄",
   trade_offer: "交易提案中",
+  road_building_1: "街道建設（1本目）",
+  road_building_2: "街道建設（2本目）",
   game_over: "ゲーム終了",
 };
 
@@ -1586,6 +1588,15 @@ function ActionPanel({
             </p>
           )}
 
+        {/* 街道建設カードフェーズ */}
+        {(phase === "road_building_1" || phase === "road_building_2") &&
+          isMyTurn && (
+            <p className="text-sm text-gray-600">
+              街道建設カード: {phase === "road_building_1" ? "1本目" : "2本目"}
+              の道を配置する場所をクリックしてください（資源消費なし）
+            </p>
+          )}
+
         {/* 盗賊移動フェーズ */}
         {phase === "robber_move" && isMyTurn && (
           <p className="text-sm text-gray-600">
@@ -2003,8 +2014,13 @@ export function GameRoom() {
       return gameState.edges.filter((e) => !e.road).map((e) => e.id);
     }
 
-    // メインフェーズ: 空き辺
-    if (isMyTurn && phase === "main") {
+    // メインフェーズと街道建設フェーズ: 空き辺
+    if (
+      isMyTurn &&
+      (phase === "main" ||
+        phase === "road_building_1" ||
+        phase === "road_building_2")
+    ) {
       return gameState.edges.filter((e) => !e.road).map((e) => e.id);
     }
 
@@ -2067,7 +2083,9 @@ export function GameRoom() {
       if (
         phase === "setup_road_1" ||
         phase === "setup_road_2" ||
-        phase === "main"
+        phase === "main" ||
+        phase === "road_building_1" ||
+        phase === "road_building_2"
       ) {
         playSound("build");
         sendAction({ type: "build_road", edgeId } as Omit<GameAction, "roomId">);
