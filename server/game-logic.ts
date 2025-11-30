@@ -775,11 +775,6 @@ export function leaveSeat(
     throw new Error("プレイヤーが見つかりません");
   }
 
-  // ホストは席を立てない
-  if (playerId === state.hostId) {
-    throw new Error("ホストは席を立てません");
-  }
-
   const newSpectator = {
     id: playerId,
     name: player.name,
