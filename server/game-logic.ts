@@ -64,6 +64,26 @@ function addLog(state: GameState, log: GameLogEntry): GameState {
   };
 }
 
+/**
+ * テストシナリオを深いコピーする
+ * diceRollsなどの配列がミュータブルに操作されるため、
+ * 各ゲームで独立したコピーを持つ必要がある
+ */
+function deepCloneScenario(scenario?: TestScenario): TestScenario | undefined {
+  if (!scenario) return undefined;
+  return {
+    ...scenario,
+    diceRolls: scenario.diceRolls ? [...scenario.diceRolls.map(r => ({ ...r }))] : undefined,
+    developmentCardOrder: scenario.developmentCardOrder ? [...scenario.developmentCardOrder] : undefined,
+    boardSetup: scenario.boardSetup ? {
+      terrains: [...scenario.boardSetup.terrains],
+      numberTokens: [...scenario.boardSetup.numberTokens],
+    } : undefined,
+    turnOrder: scenario.turnOrder ? [...scenario.turnOrder] : undefined,
+    stealIndices: scenario.stealIndices ? [...scenario.stealIndices] : undefined,
+  };
+}
+
 // ============================================
 // 定数
 // ============================================
@@ -548,7 +568,7 @@ export function createInitialGameState(
     logs: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    testScenario: scenario,
+    testScenario: deepCloneScenario(scenario),
   };
 }
 
@@ -606,7 +626,7 @@ export function resetGameState(state: GameState, scenario?: TestScenario): GameS
     logs: [],
     createdAt: state.createdAt,
     updatedAt: new Date().toISOString(),
-    testScenario: scenario,
+    testScenario: deepCloneScenario(scenario),
   };
 }
 
