@@ -104,11 +104,7 @@ function formatLogMessage(log: GameLogEntry): string {
       return "🦹 盗賊を移動";
     case "steal_resource":
       if (log.data?.targetPlayerName) {
-        if (log.data?.stolenResource) {
-          const icon = RESOURCE_ICONS[log.data.stolenResource];
-          return `${log.data.targetPlayerName}から${icon}を奪った`;
-        }
-        return `${log.data.targetPlayerName}から奪おうとした(資源なし)`;
+        return `${log.data.targetPlayerName}から資源を奪った`;
       }
       return "資源を奪った";
     case "discard_resources":

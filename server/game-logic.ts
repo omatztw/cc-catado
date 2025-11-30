@@ -1593,11 +1593,10 @@ export function handleStealResource(
     });
   }
 
-  // 略奪ログを追加
+  // 略奪ログを追加（奪った資源は秘密なので記録しない）
   const stealLog = createLogEntry("steal_resource", player, {
     targetPlayerId,
     targetPlayerName: targetPlayer.name,
-    stolenResource,
   });
   let newState = addLog(state, stealLog);
 
