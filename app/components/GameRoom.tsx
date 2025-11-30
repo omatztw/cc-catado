@@ -981,39 +981,44 @@ function ActionPanel({
     0
   );
 
-  // 盗賊に隣接するプレイヤーを取得
+  // 盗賊に隣接するプレイヤーを取得（サーバー側と同じロジック）
   const getStealablePlayerIds = (): string[] => {
     const robberHex = gameState.hexes.find((h) => h.hasRobber);
     if (!robberHex) return [];
 
     const adjacentPlayerIds = new Set<string>();
-    gameState.intersections.forEach((intersection) => {
+
+    // サーバー側と同じロジックで隣接頂点IDを計算
+    const cubeToId = (coord: { q: number; r: number; s: number }) =>
+      `${coord.q},${coord.r},${coord.s}`;
+
+    const hex = robberHex.coordinate;
+    const adjacentVertexIds = [
+      // 上 (Top)
+      `${cubeToId(hex)}_N`,
+      // 下 (Bottom)
+      `${cubeToId(hex)}_S`,
+      // 右上 (Upper-right): NE隣の下
+      `${cubeToId({ q: hex.q + 1, r: hex.r - 1, s: hex.s })}_S`,
+      // 右下 (Lower-right): SE隣の上
+      `${cubeToId({ q: hex.q, r: hex.r + 1, s: hex.s - 1 })}_N`,
+      // 左下 (Lower-left): SW隣の上
+      `${cubeToId({ q: hex.q - 1, r: hex.r + 1, s: hex.s })}_N`,
+      // 左上 (Upper-left): NW隣の下
+      `${cubeToId({ q: hex.q, r: hex.r - 1, s: hex.s + 1 })}_S`,
+    ];
+
+    for (const vertexId of adjacentVertexIds) {
+      const intersection = gameState.intersections.find(
+        (i) => i.id === vertexId
+      );
       if (
-        intersection.building &&
+        intersection?.building &&
         intersection.building.playerId !== playerId
       ) {
-        // 簡易的な隣接チェック（hexIdが含まれるか）
-        const hexId = robberHex.id;
-        if (intersection.id.includes(hexId.split(",")[0])) {
-          adjacentPlayerIds.add(intersection.building.playerId);
-        }
+        adjacentPlayerIds.add(intersection.building.playerId);
       }
-    });
-
-    // より正確な方法: 隣接判定
-    const robberCoord = robberHex.coordinate;
-    gameState.intersections.forEach((i) => {
-      if (i.building && i.building.playerId !== playerId) {
-        const vertexHex = i.coordinate.hex;
-        // 同じ六角形または隣接している場合
-        const dx = Math.abs(vertexHex.q - robberCoord.q);
-        const dy = Math.abs(vertexHex.r - robberCoord.r);
-        const dz = Math.abs(vertexHex.s - robberCoord.s);
-        if (dx <= 1 && dy <= 1 && dz <= 1) {
-          adjacentPlayerIds.add(i.building.playerId);
-        }
-      }
-    });
+    }
 
     return Array.from(adjacentPlayerIds);
   };
