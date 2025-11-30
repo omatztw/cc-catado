@@ -31,7 +31,7 @@ export interface UseGameSocketOptions {
   autoConnect?: boolean;
 }
 
-/** セッション情報（localStorage保存用） */
+/** セッション情報（localStorage保存用） - 後方互換性のため残す */
 export interface SessionInfo {
   roomId: string;
   playerId: string;
@@ -44,6 +44,12 @@ export interface UseGameSocketReturn {
   isConnected: boolean;
   /** 接続中かどうか */
   isConnecting: boolean;
+  /** ログイン済みかどうか */
+  isLoggedIn: boolean;
+  /** ログイン中のユーザー名 */
+  loggedInUsername: string | null;
+  /** セッション復旧可能なルームID */
+  activeRoomId: string | null;
   /** 現在のゲーム状態 */
   gameState: GameState | null;
   /** 現在のプレイヤーID */
@@ -56,19 +62,22 @@ export interface UseGameSocketReturn {
   chatMessages: ChatMessage[];
   /** 公開ルーム一覧 */
   publicRooms: RoomInfo[];
-  /** 保存されたセッション情報 */
+  /** 保存されたセッション情報（後方互換性） */
   savedSession: SessionInfo | null;
-  /** ルームを作成 */
+  /** ログイン */
+  login: (username: string, password: string) => void;
+  /** ログアウト */
+  logout: () => void;
+  /** ルームを作成（ログイン後に使用） */
   createRoom: (data: {
-    playerName: string;
     roomName: string;
     isPublic: boolean;
     password?: string;
   }) => void;
-  /** ルームに参加 */
-  joinRoom: (roomId: string, playerName: string, password?: string) => void;
-  /** ルームに再参加（再接続用） */
-  rejoinRoom: (roomId: string, playerId: string) => void;
+  /** ルームに参加（ログイン後に使用） */
+  joinRoom: (roomId: string, password?: string) => void;
+  /** ルームに再参加（セッション復旧用、ログイン後に使用） */
+  rejoinRoom: (roomId: string) => void;
   /** ルームから退出 */
   leaveRoom: () => void;
   /** 席に着く（観戦者→プレイヤー） */
@@ -150,6 +159,9 @@ export function useGameSocket(
 
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loggedInUsername, setLoggedInUsername] = useState<string | null>(null);
+  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [isSpectator, setIsSpectator] = useState(false);
@@ -163,7 +175,7 @@ export function useGameSocket(
   const roomIdRef = useRef<string | null>(null);
   const playerNameRef = useRef<string | null>(null);
 
-  // 初回マウント時にセッション情報を読み込み
+  // 初回マウント時にセッション情報を読み込み（後方互換性のため残す）
   useEffect(() => {
     const session = loadSession();
     setSavedSession(session);
@@ -219,6 +231,26 @@ export function useGameSocket(
     });
 
     // ============================================
+    // ログインイベントハンドラー
+    // ============================================
+
+    socket.on("login_result", (data) => {
+      console.log("[useGameSocket] Login result:", data);
+
+      if (data.success && data.playerId && data.username) {
+        setPlayerId(data.playerId);
+        setLoggedInUsername(data.username);
+        setIsLoggedIn(true);
+        setActiveRoomId(data.activeRoomId || null);
+        setError(null);
+        playerNameRef.current = data.username;
+      } else {
+        setError(data.error || "ログインに失敗しました");
+        setIsLoggedIn(false);
+      }
+    });
+
+    // ============================================
     // ゲームイベントハンドラー
     // ============================================
 
@@ -230,8 +262,9 @@ export function useGameSocket(
         setGameState(data.gameState);
         setIsSpectator(false); // ルーム作成者は常にプレイヤー
         roomIdRef.current = data.roomId;
+        setActiveRoomId(null); // ルームに参加したのでアクティブルーム表示をクリア
         setError(null);
-        // セッション情報を保存
+        // セッション情報を保存（後方互換性のため）
         const playerName = data.gameState.players.find(p => p.id === data.playerId)?.name || "";
         playerNameRef.current = playerName;
         saveSession({
@@ -240,7 +273,7 @@ export function useGameSocket(
           playerName,
           timestamp: Date.now(),
         });
-        setSavedSession(null); // 新規作成なので古いセッションはクリア
+        setSavedSession(null);
       } else {
         setError(data.error || "ルームの作成に失敗しました");
       }
@@ -254,8 +287,9 @@ export function useGameSocket(
         setGameState(data.gameState);
         setIsSpectator(data.isSpectator); // 観戦者かどうかを設定
         roomIdRef.current = data.roomId;
+        setActiveRoomId(null); // ルームに参加したのでアクティブルーム表示をクリア
         setError(null);
-        // セッション情報を保存（観戦者の場合も保存）
+        // セッション情報を保存（後方互換性のため）
         const player = data.gameState.players.find(p => p.id === data.playerId);
         const spectator = data.gameState.spectators.find(s => s.id === data.playerId);
         const playerName = player?.name || spectator?.name || "";
@@ -266,7 +300,7 @@ export function useGameSocket(
           playerName,
           timestamp: Date.now(),
         });
-        setSavedSession(null); // 参加成功したので古いセッションはクリア
+        setSavedSession(null);
       } else {
         setError(data.error || "ルームへの参加に失敗しました");
       }
@@ -280,8 +314,9 @@ export function useGameSocket(
         setGameState(data.gameState);
         setIsSpectator(data.isSpectator); // 観戦者かどうかを設定
         roomIdRef.current = data.roomId;
+        setActiveRoomId(null); // ルームに参加したのでアクティブルーム表示をクリア
         setError(null);
-        // セッション情報を更新
+        // セッション情報を更新（後方互換性のため）
         const player = data.gameState.players.find(p => p.id === data.playerId);
         const spectator = data.gameState.spectators.find(s => s.id === data.playerId);
         const playerName = player?.name || spectator?.name || "";
@@ -292,12 +327,13 @@ export function useGameSocket(
           playerName,
           timestamp: Date.now(),
         });
-        setSavedSession(null); // 再接続成功したのでセッション表示をクリア
+        setSavedSession(null);
       } else {
         setError(data.error || "ルームへの再接続に失敗しました");
         // 再接続失敗したらセッション情報をクリア
         clearSession();
         setSavedSession(null);
+        setActiveRoomId(null);
       }
     });
 
@@ -379,63 +415,99 @@ export function useGameSocket(
   // ============================================
 
   /**
-   * ルームを作成
+   * ログイン
+   */
+  const login = useCallback(
+    (username: string, password: string) => {
+      const socket = initializeSocket();
+
+      if (!socket.connected) {
+        socket.once("connect", () => {
+          socket.emit("login", { username, password });
+        });
+      } else {
+        socket.emit("login", { username, password });
+      }
+    },
+    [initializeSocket]
+  );
+
+  /**
+   * ログアウト
+   */
+  const logout = useCallback(() => {
+    setIsLoggedIn(false);
+    setLoggedInUsername(null);
+    setActiveRoomId(null);
+    setPlayerId(null);
+    setGameState(null);
+    setIsSpectator(false);
+    setChatMessages([]);
+    roomIdRef.current = null;
+    playerNameRef.current = null;
+    clearSession();
+    setSavedSession(null);
+  }, []);
+
+  /**
+   * ルームを作成（ログイン後に使用）
    */
   const createRoom = useCallback(
     (data: {
-      playerName: string;
       roomName: string;
       isPublic: boolean;
       password?: string;
     }) => {
-      const socket = initializeSocket();
-
-      if (!socket.connected) {
-        socket.once("connect", () => {
-          socket.emit("create_room", data);
-        });
-      } else {
-        socket.emit("create_room", data);
+      if (!socketRef.current) {
+        setError("サーバーに接続されていません");
+        return;
       }
+      if (!isLoggedIn) {
+        setError("ログインしてください");
+        return;
+      }
+
+      socketRef.current.emit("create_room", data);
     },
-    [initializeSocket]
+    [isLoggedIn]
   );
 
   /**
-   * ルームに参加
+   * ルームに参加（ログイン後に使用）
    */
   const joinRoom = useCallback(
-    (roomId: string, playerName: string, password?: string) => {
-      const socket = initializeSocket();
-
-      if (!socket.connected) {
-        // 接続完了後に参加
-        socket.once("connect", () => {
-          socket.emit("join_room", { roomId, playerName, password });
-        });
-      } else {
-        socket.emit("join_room", { roomId, playerName, password });
+    (roomId: string, password?: string) => {
+      if (!socketRef.current) {
+        setError("サーバーに接続されていません");
+        return;
       }
+      if (!isLoggedIn) {
+        setError("ログインしてください");
+        return;
+      }
+
+      socketRef.current.emit("join_room", { roomId, password });
     },
-    [initializeSocket]
+    [isLoggedIn]
   );
 
   /**
-   * ルームに再参加（再接続用）
+   * ルームに再参加（セッション復旧用、ログイン後に使用）
    */
   const rejoinRoom = useCallback(
-    (roomId: string, savedPlayerId: string) => {
-      const socket = initializeSocket();
-
-      if (!socket.connected) {
-        socket.once("connect", () => {
-          socket.emit("rejoin_room", { roomId, playerId: savedPlayerId });
-        });
-      } else {
-        socket.emit("rejoin_room", { roomId, playerId: savedPlayerId });
+    (roomId: string) => {
+      if (!socketRef.current) {
+        setError("サーバーに接続されていません");
+        return;
       }
+      if (!isLoggedIn) {
+        setError("ログインしてください");
+        return;
+      }
+
+      socketRef.current.emit("rejoin_room", { roomId });
     },
-    [initializeSocket]
+    [isLoggedIn]
   );
 
   /**
@@ -448,12 +520,11 @@ export function useGameSocket(
 
     socketRef.current.emit("leave_room", { roomId: roomIdRef.current });
     setGameState(null);
-    setPlayerId(null);
+    // playerId は維持（ログインセッション継続）
     setIsSpectator(false);
     setChatMessages([]);
     roomIdRef.current = null;
-    playerNameRef.current = null;
-    // セッション情報をクリア
+    // セッション情報をクリア（後方互換性のため）
     clearSession();
     setSavedSession(null);
   }, []);
@@ -590,6 +661,9 @@ export function useGameSocket(
   return {
     isConnected,
     isConnecting,
+    isLoggedIn,
+    loggedInUsername,
+    activeRoomId,
     gameState,
     playerId,
     isSpectator,
@@ -597,6 +671,8 @@ export function useGameSocket(
     chatMessages,
     publicRooms,
     savedSession,
+    login,
+    logout,
     createRoom,
     joinRoom,
     rejoinRoom,

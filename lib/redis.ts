@@ -176,6 +176,12 @@ export const RedisKeys = {
 
   /** チャット履歴 */
   chatHistory: (roomId: string) => `${REDIS_PREFIX}room:${roomId}:chat`,
+
+  /** ユーザーのユーザー名 */
+  userUsername: (playerId: string) => `${REDIS_PREFIX}user:${playerId}:username`,
+
+  /** ユーザーの現在のルーム */
+  userRoom: (playerId: string) => `${REDIS_PREFIX}user:${playerId}:room`,
 };
 
 // ============================================
@@ -608,6 +614,64 @@ export async function deleteRoomCompletely(roomId: string): Promise<void> {
   await client.del(RedisKeys.roomPlayers(roomId));
 
   console.log(`[Redis] Room ${roomId} completely deleted`);
+}
+
+// ============================================
+// ユーザー管理
+// ============================================
+
+/**
+ * ユーザー情報を保存（ログイン時）
+ */
+export async function saveUserInfo(
+  playerId: string,
+  username: string
+): Promise<void> {
+  const client = getDataClient();
+  const ttl = 86400 * 7; // 7日間有効
+
+  await client.set(RedisKeys.userUsername(playerId), username, "EX", ttl);
+}
+
+/**
+ * ユーザー名を取得
+ */
+export async function getUsernameByPlayerId(
+  playerId: string
+): Promise<string | null> {
+  const client = getDataClient();
+  return await client.get(RedisKeys.userUsername(playerId));
+}
+
+/**
+ * ユーザーの現在のルームを保存
+ */
+export async function setUserActiveRoom(
+  playerId: string,
+  roomId: string
+): Promise<void> {
+  const client = getDataClient();
+  const ttl = 86400; // 1日間有効
+
+  await client.set(RedisKeys.userRoom(playerId), roomId, "EX", ttl);
+}
+
+/**
+ * ユーザーの現在のルームを取得
+ */
+export async function getUserActiveRoom(
+  playerId: string
+): Promise<string | null> {
+  const client = getDataClient();
+  return await client.get(RedisKeys.userRoom(playerId));
+}
+
+/**
+ * ユーザーの現在のルームをクリア
+ */
+export async function clearUserActiveRoom(playerId: string): Promise<void> {
+  const client = getDataClient();
+  await client.del(RedisKeys.userRoom(playerId));
 }
 
 // ============================================

@@ -286,23 +286,25 @@ export interface GameState {
  * クライアント → サーバー のイベント
  */
 export interface ClientToServerEvents {
+  // ログイン（ユーザー名+パスワードからplayerIdを発行）
+  login: (data: {
+    username: string;
+    password: string;
+  }) => void;
   // ルーム作成
   create_room: (data: {
-    playerName: string;
     roomName: string;
     isPublic: boolean;
     password?: string;
   }) => void;
-  // ルーム参加
+  // ルーム参加（ログイン後に使用）
   join_room: (data: {
     roomId: string;
-    playerName: string;
     password?: string;
   }) => void;
-  // ルーム再参加（再接続用）
+  // ルーム再参加（再接続時、ログイン後に自動で呼ばれる）
   rejoin_room: (data: {
     roomId: string;
-    playerId: string;
   }) => void;
   // ルーム退出
   leave_room: (data: { roomId: string }) => void;
@@ -324,6 +326,15 @@ export interface ClientToServerEvents {
  * サーバー → クライアント のイベント
  */
 export interface ServerToClientEvents {
+  // ログイン結果
+  login_result: (data: {
+    success: boolean;
+    playerId?: string;
+    username?: string;
+    // 既に参加中のルームがあれば返す（セッション復旧用）
+    activeRoomId?: string;
+    error?: string;
+  }) => void;
   // ルーム作成結果
   room_created: (data: {
     success: boolean;

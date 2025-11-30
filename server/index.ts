@@ -4,6 +4,7 @@
  */
 
 import { createServer } from "http";
+import { createHash } from "crypto";
 import { Server, Socket } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { v4 as uuidv4 } from "uuid";
@@ -40,6 +41,11 @@ import {
   updateRoomActivity,
   getInactiveRoomIds,
   deleteRoomCompletely,
+  saveUserInfo,
+  getUsernameByPlayerId,
+  setUserActiveRoom,
+  getUserActiveRoom,
+  clearUserActiveRoom,
 } from "../lib/redis";
 
 import {
@@ -76,6 +82,20 @@ const ROOM_CLEANUP_INTERVAL_MS = parseInt(
   process.env.ROOM_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000),
   10
 );
+
+// ログイン用の秘密鍵（本番環境では環境変数で設定すること）
+const LOGIN_SECRET = process.env.LOGIN_SECRET || "catado-default-secret-key-change-in-production";
+
+/**
+ * ユーザー名とパスワードからプレイヤーIDを生成
+ * 同じユーザー名+パスワードからは常に同じIDが生成される
+ */
+function generatePlayerId(username: string, password: string): string {
+  const input = `${username}:${password}:${LOGIN_SECRET}`;
+  const hash = createHash("sha256").update(input).digest("hex");
+  // UUIDっぽいフォーマットに変換（既存のシステムとの互換性のため）
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+}
 
 // ============================================
 // サーバー初期化
@@ -191,23 +211,125 @@ async function broadcastGameState(roomId: string, gameState: GameState): Promise
 // ============================================
 
 /**
+ * ログインハンドラー
+ * ユーザー名+パスワードからplayerIdを発行
+ */
+async function handleLogin(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: {
+    username: string;
+    password: string;
+  }
+): Promise<void> {
+  const { username, password } = data;
+
+  try {
+    // 入力バリデーション
+    if (!username || username.trim().length === 0) {
+      socket.emit("login_result", {
+        success: false,
+        error: "ユーザー名を入力してください",
+      });
+      return;
+    }
+
+    if (username.length > 20) {
+      socket.emit("login_result", {
+        success: false,
+        error: "ユーザー名は20文字以内にしてください",
+      });
+      return;
+    }
+
+    if (!password || password.length === 0) {
+      socket.emit("login_result", {
+        success: false,
+        error: "パスワードを入力してください",
+      });
+      return;
+    }
+
+    // playerIdを生成
+    const playerId = generatePlayerId(username.trim(), password);
+
+    // ユーザー情報を保存
+    await saveUserInfo(playerId, username.trim());
+
+    // ソケットにplayerIdを関連付け（roomIdは後で設定）
+    // 暫定的にソケットIDをキーにしてplayerIdを保存
+    const dataClient = getDataClient();
+    await dataClient.set(`catado:socket:${socket.id}:loggedInPlayerId`, playerId, "EX", 86400);
+
+    // 既に参加中のルームがあるか確認
+    const activeRoomId = await getUserActiveRoom(playerId);
+
+    console.log(`[Server] User logged in: ${username} (${playerId}), activeRoom: ${activeRoomId || "none"}`);
+
+    socket.emit("login_result", {
+      success: true,
+      playerId,
+      username: username.trim(),
+      activeRoomId: activeRoomId || undefined,
+    });
+  } catch (error) {
+    console.error("[Server] Login error:", error);
+    socket.emit("login_result", {
+      success: false,
+      error: "ログインに失敗しました",
+    });
+  }
+}
+
+/**
+ * ログイン済みのplayerIdを取得
+ */
+async function getLoggedInPlayerId(socketId: string): Promise<string | null> {
+  const dataClient = getDataClient();
+  return await dataClient.get(`catado:socket:${socketId}:loggedInPlayerId`);
+}
+
+/**
  * ルーム作成ハンドラー
  */
 async function handleCreateRoom(
   socket: Socket<ClientToServerEvents, ServerToClientEvents>,
   data: {
-    playerName: string;
     roomName: string;
     isPublic: boolean;
     password?: string;
   }
 ): Promise<void> {
-  const { playerName, roomName, isPublic, password } = data;
+  const { roomName, isPublic, password } = data;
 
   try {
-    // ルームIDとプレイヤーIDを生成
+    // ログイン済みか確認
+    const playerId = await getLoggedInPlayerId(socket.id);
+    if (!playerId) {
+      socket.emit("room_created", {
+        success: false,
+        roomId: "",
+        playerId: "",
+        gameState: null,
+        error: "ログインしてください",
+      });
+      return;
+    }
+
+    // ユーザー名を取得
+    const playerName = await getUsernameByPlayerId(playerId);
+    if (!playerName) {
+      socket.emit("room_created", {
+        success: false,
+        roomId: "",
+        playerId: "",
+        gameState: null,
+        error: "ユーザー情報が見つかりません。再度ログインしてください",
+      });
+      return;
+    }
+
+    // ルームIDを生成（playerIdは既に持っている）
     const roomId = `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const playerId = uuidv4();
 
     // 新しいゲーム状態を作成（作成者をホストに設定）
     let gameState = createInitialGameState(roomId, playerId);
@@ -241,6 +363,9 @@ async function handleCreateRoom(
       lastActivityAt: now,
     };
     await saveRoomInfo(roomId, roomInfo, password);
+
+    // ユーザーのアクティブルームを設定
+    await setUserActiveRoom(playerId, roomId);
 
     // 作成者に通知
     socket.emit("room_created", {
@@ -286,11 +411,39 @@ async function handleGetPublicRooms(
  */
 async function handleJoinRoom(
   socket: Socket<ClientToServerEvents, ServerToClientEvents>,
-  data: { roomId: string; playerName: string; password?: string }
+  data: { roomId: string; password?: string }
 ): Promise<void> {
-  const { roomId, playerName, password } = data;
+  const { roomId, password } = data;
 
   try {
+    // ログイン済みか確認
+    const playerId = await getLoggedInPlayerId(socket.id);
+    if (!playerId) {
+      socket.emit("room_joined", {
+        success: false,
+        roomId,
+        playerId: "",
+        gameState: null,
+        isSpectator: false,
+        error: "ログインしてください",
+      });
+      return;
+    }
+
+    // ユーザー名を取得
+    const playerName = await getUsernameByPlayerId(playerId);
+    if (!playerName) {
+      socket.emit("room_joined", {
+        success: false,
+        roomId,
+        playerId: "",
+        gameState: null,
+        isSpectator: false,
+        error: "ユーザー情報が見つかりません。再度ログインしてください",
+      });
+      return;
+    }
+
     // 既存のルーム情報を取得
     const existingRoomInfo = await getRoomInfo(roomId);
 
@@ -323,9 +476,6 @@ async function handleJoinRoom(
       }
     }
 
-    // プレイヤーIDを生成
-    const oduserId = uuidv4();
-
     // 既存のゲーム状態を取得
     let gameState = await getGameState(roomId);
 
@@ -341,15 +491,35 @@ async function handleJoinRoom(
       return;
     }
 
-    // 常に観戦者として追加（ゲーム中でも参加可能）
-    gameState = addSpectatorToGame(gameState, oduserId, playerName);
-    const isJoiningAsSpectator = true;
+    // 既にこのプレイヤーがルームにいるか確認
+    const existingPlayer = gameState.players.find(p => p.id === playerId);
+    const existingSpectator = gameState.spectators.find(s => s.id === playerId);
+
+    let isJoiningAsSpectator = true;
+
+    if (existingPlayer) {
+      // 既存のプレイヤーとして復帰
+      isJoiningAsSpectator = false;
+      // 名前が変わっている可能性があるので更新
+      existingPlayer.name = playerName;
+      existingPlayer.isConnected = true;
+    } else if (existingSpectator) {
+      // 既存の観戦者として復帰
+      existingSpectator.name = playerName;
+      existingSpectator.isConnected = true;
+    } else {
+      // 新規参加者は観戦者として追加
+      gameState = addSpectatorToGame(gameState, playerId, playerName);
+    }
 
     // Socket.ioルームに参加
     await socket.join(roomId);
 
     // Redis にマッピングを保存
-    await setSocketPlayerMapping(socket.id, oduserId, roomId);
+    await setSocketPlayerMapping(socket.id, playerId, roomId);
+
+    // ユーザーのアクティブルームを設定
+    await setUserActiveRoom(playerId, roomId);
 
     // ゲーム状態を保存
     await saveGameState(roomId, gameState);
@@ -368,12 +538,12 @@ async function handleJoinRoom(
     // 参加者に通知（観戦者の場合は手札情報を隠す）
     const filteredState = isJoiningAsSpectator
       ? filterStateForSpectator(gameState)
-      : filterStateForPlayer(gameState, oduserId);
+      : filterStateForPlayer(gameState, playerId);
 
     socket.emit("room_joined", {
       success: true,
       roomId,
-      playerId: oduserId,
+      playerId,
       gameState: filteredState,
       isSpectator: isJoiningAsSpectator,
     });
@@ -382,7 +552,7 @@ async function handleJoinRoom(
     await broadcastGameState(roomId, gameState);
 
     console.log(
-      `[Server] ${isJoiningAsSpectator ? "Spectator" : "Player"} ${playerName} (${oduserId}) joined room ${roomId}`
+      `[Server] ${isJoiningAsSpectator ? "Spectator" : "Player"} ${playerName} (${playerId}) joined room ${roomId}`
     );
   } catch (error) {
     console.error("[Server] Error in handleJoinRoom:", error);
@@ -456,6 +626,9 @@ async function handleLeaveRoom(
 
     // マッピングを削除
     await removeSocketPlayerMapping(socket.id);
+
+    // ユーザーのアクティブルームをクリア
+    await clearUserActiveRoom(oduserId);
 
     // Socket.ioルームから退出
     await socket.leave(roomId);
@@ -760,11 +933,25 @@ async function handleChatMessage(
  */
 async function handleRejoinRoom(
   socket: Socket<ClientToServerEvents, ServerToClientEvents>,
-  data: { roomId: string; playerId: string }
+  data: { roomId: string }
 ): Promise<void> {
-  const { roomId, playerId } = data;
+  const { roomId } = data;
 
   try {
+    // ログイン済みか確認
+    const playerId = await getLoggedInPlayerId(socket.id);
+    if (!playerId) {
+      socket.emit("room_rejoined", {
+        success: false,
+        roomId,
+        playerId: "",
+        gameState: null,
+        isSpectator: false,
+        error: "ログインしてください",
+      });
+      return;
+    }
+
     // ゲーム状態を取得
     let gameState = await getGameState(roomId);
 
@@ -823,6 +1010,9 @@ async function handleRejoinRoom(
     // Redis にマッピングを保存
     await setSocketPlayerMapping(socket.id, playerId, roomId);
 
+    // ユーザーのアクティブルームを設定
+    await setUserActiveRoom(playerId, roomId);
+
     // ゲーム状態を保存
     await saveGameState(roomId, gameState);
 
@@ -857,7 +1047,7 @@ async function handleRejoinRoom(
     socket.emit("room_rejoined", {
       success: false,
       roomId,
-      playerId,
+      playerId: "",
       gameState: null,
       isSpectator: false,
       error: "再接続に失敗しました",
@@ -985,6 +1175,7 @@ io.on("connection", (socket) => {
   console.log(`[Server] Client connected: ${socket.id}`);
 
   // イベントリスナーを登録
+  socket.on("login", (data) => handleLogin(socket, data));
   socket.on("create_room", (data) => handleCreateRoom(socket, data));
   socket.on("join_room", (data) => handleJoinRoom(socket, data));
   socket.on("rejoin_room", (data) => handleRejoinRoom(socket, data));

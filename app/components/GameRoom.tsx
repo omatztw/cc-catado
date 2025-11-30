@@ -81,22 +81,21 @@ const PHASE_LABELS: Record<GamePhase, string> = {
  * ルーム作成モーダル
  */
 function CreateRoomModal({
-  playerName,
+  username,
   onClose,
   onCreate,
   isLoading,
 }: {
-  playerName: string;
+  username: string;
   onClose: () => void;
   onCreate: (data: {
-    playerName: string;
     roomName: string;
     isPublic: boolean;
     password?: string;
   }) => void;
   isLoading: boolean;
 }) {
-  const [roomName, setRoomName] = useState(`${playerName}のルーム`);
+  const [roomName, setRoomName] = useState(`${username}のルーム`);
   const [isPublic, setIsPublic] = useState(true);
   const [usePassword, setUsePassword] = useState(false);
   const [password, setPassword] = useState("");
@@ -104,7 +103,6 @@ function CreateRoomModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onCreate({
-      playerName,
       roomName: roomName.trim(),
       isPublic,
       password: usePassword ? password : undefined,
@@ -328,13 +326,17 @@ function PublicRoomList({
 }
 
 /**
- * ロビー画面（ルーム参加前）
+ * ロビー画面（ログイン・ルーム参加前）
  */
 function Lobby({
+  isLoggedIn,
+  loggedInUsername,
+  activeRoomId,
   publicRooms,
+  onLogin,
+  onLogout,
   onCreateRoom,
   onJoinRoom,
-  onJoinPrivateRoom,
   onRejoinRoom,
   onRefreshRooms,
   savedSession,
@@ -342,23 +344,30 @@ function Lobby({
   error,
   isConnecting,
 }: {
+  isLoggedIn: boolean;
+  loggedInUsername: string | null;
+  activeRoomId: string | null;
   publicRooms: RoomInfo[];
+  onLogin: (username: string, password: string) => void;
+  onLogout: () => void;
   onCreateRoom: (data: {
-    playerName: string;
     roomName: string;
     isPublic: boolean;
     password?: string;
   }) => void;
-  onJoinRoom: (roomId: string, playerName: string, password?: string) => void;
-  onJoinPrivateRoom: (roomId: string, playerName: string, password?: string) => void;
-  onRejoinRoom: (roomId: string, playerId: string) => void;
+  onJoinRoom: (roomId: string, password?: string) => void;
+  onRejoinRoom: (roomId: string) => void;
   onRefreshRooms: () => void;
   savedSession: SessionInfo | null;
   onClearSavedSession: () => void;
   error: string | null;
   isConnecting: boolean;
 }) {
-  const [playerName, setPlayerName] = useState("");
+  // ログインフォーム用
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  // ルーム参加用
   const [privateRoomId, setPrivateRoomId] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [passwordModal, setPasswordModal] = useState<{
@@ -366,40 +375,43 @@ function Lobby({
   } | null>(null);
   const [activeTab, setActiveTab] = useState<"public" | "private">("public");
 
-  // 初回ロード時にルーム一覧を取得
+  // ログイン時にルーム一覧を取得
   useEffect(() => {
-    onRefreshRooms();
-  }, [onRefreshRooms]);
-
-  const handleJoinPublicRoom = (room: RoomInfo) => {
-    if (!playerName.trim()) {
-      alert("プレイヤー名を入力してください");
-      return;
+    if (isLoggedIn) {
+      onRefreshRooms();
     }
+  }, [isLoggedIn, onRefreshRooms]);
 
-    if (room.hasPassword) {
-      setPasswordModal({ room });
-    } else {
-      onJoinRoom(room.id, playerName.trim());
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (username.trim() && password) {
+      onLogin(username.trim(), password);
     }
   };
 
-  const handlePasswordSubmit = (password: string) => {
+  const handleJoinPublicRoom = (room: RoomInfo) => {
+    if (room.hasPassword) {
+      setPasswordModal({ room });
+    } else {
+      onJoinRoom(room.id);
+    }
+  };
+
+  const handlePasswordSubmit = (roomPassword: string) => {
     if (passwordModal) {
-      onJoinRoom(passwordModal.room.id, playerName.trim(), password);
+      onJoinRoom(passwordModal.room.id, roomPassword);
       setPasswordModal(null);
     }
   };
 
   const handleJoinPrivateRoom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (playerName.trim() && privateRoomId.trim()) {
-      onJoinPrivateRoom(privateRoomId.trim(), playerName.trim());
+    if (privateRoomId.trim()) {
+      onJoinRoom(privateRoomId.trim());
     }
   };
 
   const handleCreateRoom = (data: {
-    playerName: string;
     roomName: string;
     isPublic: boolean;
     password?: string;
@@ -408,6 +420,76 @@ function Lobby({
     setShowCreateModal(false);
   };
 
+  // ログイン画面
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 p-4">
+        <div className="max-w-md mx-auto">
+          {/* ヘッダー */}
+          <div className="text-center mb-6 pt-8">
+            <h1 className="text-4xl font-bold text-white mb-2">カタド</h1>
+            <p className="text-blue-200">カタン風ボードゲーム</p>
+          </div>
+
+          {/* ログインカード */}
+          <div className="bg-white rounded-xl shadow-2xl overflow-hidden">
+            <div className="p-6">
+              <h2 className="text-xl font-bold text-gray-800 mb-4 text-center">
+                ログイン
+              </h2>
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    ユーザー名
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="ユーザー名を入力"
+                    maxLength={20}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    パスワード
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="パスワードを入力"
+                    required
+                  />
+                </div>
+                {error && (
+                  <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded text-sm">
+                    {error}
+                  </div>
+                )}
+                <button
+                  type="submit"
+                  disabled={isConnecting || !username.trim() || !password}
+                  className="w-full py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:bg-gray-400 transition"
+                >
+                  {isConnecting ? "接続中..." : "ログイン"}
+                </button>
+              </form>
+              <p className="text-xs text-gray-500 text-center mt-4">
+                同じユーザー名とパスワードでログインすると、<br />
+                前回のゲームセッションに復帰できます
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ロビー画面（ログイン済み）
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-900 to-blue-700 p-4">
       <div className="max-w-2xl mx-auto">
@@ -419,19 +501,18 @@ function Lobby({
 
         {/* メインカード */}
         <div className="bg-white rounded-xl shadow-2xl overflow-hidden">
-          {/* プレイヤー名入力 */}
-          <div className="p-6 border-b bg-gray-50">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              プレイヤー名
-            </label>
-            <input
-              type="text"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="名前を入力してください"
-              maxLength={20}
-            />
+          {/* ユーザー情報バー */}
+          <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">ログイン中:</span>
+              <span className="font-medium text-gray-800">{loggedInUsername}</span>
+            </div>
+            <button
+              onClick={onLogout}
+              className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-200 rounded transition"
+            >
+              ログアウト
+            </button>
           </div>
 
           {/* エラー表示 */}
@@ -441,33 +522,47 @@ function Lobby({
             </div>
           )}
 
-          {/* 再接続バナー */}
-          {savedSession && (
+          {/* セッション復旧バナー */}
+          {activeRoomId && (
             <div className="bg-yellow-50 border-b border-yellow-300 px-6 py-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium text-yellow-800">
-                    前回のゲームセッションが見つかりました
+                    参加中のゲームセッションが見つかりました
                   </p>
                   <p className="text-xs text-yellow-700 mt-1">
-                    ルーム: {savedSession.roomId} / プレイヤー: {savedSession.playerName}
+                    ルーム: {activeRoomId}
                   </p>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => onRejoinRoom(savedSession.roomId, savedSession.playerId)}
-                    disabled={isConnecting}
-                    className="px-4 py-2 bg-yellow-600 text-white text-sm rounded-lg font-medium hover:bg-yellow-700 disabled:bg-gray-400 transition"
-                  >
-                    {isConnecting ? "接続中..." : "再接続"}
-                  </button>
-                  <button
-                    onClick={onClearSavedSession}
-                    className="px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition"
-                  >
-                    ×
-                  </button>
+                <button
+                  onClick={() => onRejoinRoom(activeRoomId)}
+                  disabled={isConnecting}
+                  className="px-4 py-2 bg-yellow-600 text-white text-sm rounded-lg font-medium hover:bg-yellow-700 disabled:bg-gray-400 transition"
+                >
+                  {isConnecting ? "接続中..." : "ゲームに復帰"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 旧セッション復旧バナー（後方互換性） */}
+          {!activeRoomId && savedSession && (
+            <div className="bg-gray-100 border-b border-gray-300 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-700">
+                    前回のセッション情報があります（古い形式）
+                  </p>
+                  <p className="text-xs text-gray-600 mt-1">
+                    同じユーザー名でログインし直してください
+                  </p>
                 </div>
+                <button
+                  onClick={onClearSavedSession}
+                  className="px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300 transition"
+                >
+                  クリア
+                </button>
               </div>
             </div>
           )}
@@ -510,13 +605,7 @@ function Lobby({
                     ↻ 更新
                   </button>
                   <button
-                    onClick={() => {
-                      if (!playerName.trim()) {
-                        alert("プレイヤー名を入力してください");
-                        return;
-                      }
-                      setShowCreateModal(true);
-                    }}
+                    onClick={() => setShowCreateModal(true)}
                     className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition"
                   >
                     + 新しいルームを作成
@@ -546,9 +635,7 @@ function Lobby({
                 </div>
                 <button
                   type="submit"
-                  disabled={
-                    isConnecting || !playerName.trim() || !privateRoomId.trim()
-                  }
+                  disabled={isConnecting || !privateRoomId.trim()}
                   className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition"
                 >
                   {isConnecting ? "接続中..." : "参加"}
@@ -568,9 +655,9 @@ function Lobby({
       </div>
 
       {/* モーダル */}
-      {showCreateModal && (
+      {showCreateModal && loggedInUsername && (
         <CreateRoomModal
-          playerName={playerName}
+          username={loggedInUsername}
           onClose={() => setShowCreateModal(false)}
           onCreate={handleCreateRoom}
           isLoading={isConnecting}
@@ -1736,6 +1823,9 @@ export function GameRoom() {
   const {
     isConnected,
     isConnecting,
+    isLoggedIn,
+    loggedInUsername,
+    activeRoomId,
     gameState,
     playerId,
     isSpectator,
@@ -1743,6 +1833,8 @@ export function GameRoom() {
     chatMessages,
     publicRooms,
     savedSession,
+    login,
+    logout,
     createRoom,
     joinRoom,
     rejoinRoom,
@@ -1945,10 +2037,14 @@ export function GameRoom() {
   if (!gameState) {
     return (
       <Lobby
+        isLoggedIn={isLoggedIn}
+        loggedInUsername={loggedInUsername}
+        activeRoomId={activeRoomId}
         publicRooms={publicRooms}
+        onLogin={login}
+        onLogout={logout}
         onCreateRoom={createRoom}
         onJoinRoom={joinRoom}
-        onJoinPrivateRoom={joinRoom}
         onRejoinRoom={rejoinRoom}
         onRefreshRooms={fetchPublicRooms}
         savedSession={savedSession}
