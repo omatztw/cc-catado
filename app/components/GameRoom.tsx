@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { useGameSocket, useCurrentPlayer, useIsMyTurn, SessionInfo } from "../hooks/useGameSocket";
 import { useSound } from "../hooks/useSound";
 import { useNotification } from "../hooks/useNotification";
@@ -343,6 +344,7 @@ function Lobby({
   onClearSavedSession,
   error,
   isConnecting,
+  urlRoomId,
 }: {
   isLoggedIn: boolean;
   loggedInUsername: string | null;
@@ -362,6 +364,7 @@ function Lobby({
   onClearSavedSession: () => void;
   error: string | null;
   isConnecting: boolean;
+  urlRoomId: string | null;
 }) {
   // ログインフォーム用
   const [username, setUsername] = useState("");
@@ -375,12 +378,23 @@ function Lobby({
   } | null>(null);
   const [activeTab, setActiveTab] = useState<"public" | "private">("public");
 
+  // URL経由のルーム参加済みかどうか
+  const [urlJoinAttempted, setUrlJoinAttempted] = useState(false);
+
   // ログイン時にルーム一覧を取得
   useEffect(() => {
     if (isLoggedIn) {
       onRefreshRooms();
     }
   }, [isLoggedIn, onRefreshRooms]);
+
+  // URLからroomIdが指定されている場合、ログイン後に自動で参加
+  useEffect(() => {
+    if (isLoggedIn && urlRoomId && !urlJoinAttempted && !activeRoomId) {
+      setUrlJoinAttempted(true);
+      onJoinRoom(urlRoomId);
+    }
+  }, [isLoggedIn, urlRoomId, urlJoinAttempted, activeRoomId, onJoinRoom]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -468,6 +482,11 @@ function Lobby({
                 {error && (
                   <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded text-sm">
                     {error}
+                  </div>
+                )}
+                {urlRoomId && (
+                  <div className="bg-blue-50 border border-blue-300 text-blue-700 px-4 py-2 rounded text-sm">
+                    ログイン後、ルーム「{urlRoomId}」に参加します
                   </div>
                 )}
                 <button
@@ -1852,6 +1871,10 @@ function ChatPanel({
 // ============================================
 
 export function GameRoom() {
+  // URLからroomIdを取得
+  const searchParams = useSearchParams();
+  const urlRoomId = searchParams.get("roomId");
+
   const {
     isConnected,
     isConnecting,
@@ -2083,6 +2106,7 @@ export function GameRoom() {
         onClearSavedSession={clearSavedSession}
         error={error}
         isConnecting={isConnecting}
+        urlRoomId={urlRoomId}
       />
     );
   }
@@ -2099,7 +2123,8 @@ export function GameRoom() {
               ルーム: {gameState.id}
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText(gameState.id).then(() => {
+                  const shareUrl = `${window.location.origin}?roomId=${gameState.id}`;
+                  navigator.clipboard.writeText(shareUrl).then(() => {
                     // 短時間のフィードバック表示用にボタンテキストを変更
                     const btn = document.getElementById('copy-room-id-btn');
                     if (btn) {
@@ -2112,7 +2137,7 @@ export function GameRoom() {
                 }}
                 id="copy-room-id-btn"
                 className="ml-1 px-1 py-0.5 text-xs bg-blue-700 hover:bg-blue-600 rounded transition"
-                title="ルームIDをコピー"
+                title="ルームURLをコピー"
               >
                 📋
               </button>
