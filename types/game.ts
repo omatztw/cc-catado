@@ -205,6 +205,8 @@ export type GamePhase =
   | "robber_steal" // 盗賊による資源略奪
   | "discard" // 資源破棄（7が出た時、8枚以上持っている場合）
   | "trade_offer" // 交易提案中
+  | "road_building_1" // 街道建設カード：1本目の道を建設
+  | "road_building_2" // 街道建設カード：2本目の道を建設
   | "game_over"; // ゲーム終了
 
 /**

@@ -1150,6 +1150,8 @@ export function handleBuildRoad(
 
   const isSetupPhase =
     state.phase === "setup_road_1" || state.phase === "setup_road_2";
+  const isRoadBuildingPhase =
+    state.phase === "road_building_1" || state.phase === "road_building_2";
 
   // 辺の座標を解析
   const edgeCoord = parseEdgeId(edgeId);
@@ -1201,16 +1203,18 @@ export function handleBuildRoad(
       throw new Error("道は直前に配置した開拓地に隣接している必要があります");
     }
   } else {
-    if (state.phase !== "main") {
+    if (state.phase !== "main" && !isRoadBuildingPhase) {
       throw new Error("Cannot build in current phase");
     }
 
-    // コスト確認（wood:1, brick:1）
-    if (player.resources.wood < 1 || player.resources.brick < 1) {
-      throw new Error("Not enough resources");
+    // コスト確認（wood:1, brick:1）- 街道建設カードフェーズでは不要
+    if (!isRoadBuildingPhase) {
+      if (player.resources.wood < 1 || player.resources.brick < 1) {
+        throw new Error("Not enough resources");
+      }
     }
 
-    // メインフェーズでは自分の道または建物に隣接している必要がある
+    // メインフェーズと街道建設フェーズでは自分の道または建物に隣接している必要がある
     const hasConnection = adjacentVertexIds.some((vertexId) => {
       // 建物に隣接しているか
       const intersection = state.intersections.find((i) => i.id === vertexId);
@@ -1249,7 +1253,8 @@ export function handleBuildRoad(
     if (p.id !== playerId) return p;
 
     let updatedResources = { ...p.resources };
-    if (!isSetupPhase) {
+    // 初期配置フェーズと街道建設カードフェーズでは資源を消費しない
+    if (!isSetupPhase && !isRoadBuildingPhase) {
       updatedResources = {
         ...updatedResources,
         wood: updatedResources.wood - 1,
@@ -1290,6 +1295,12 @@ export function handleBuildRoad(
       nextPhase = "setup_settlement_2";
       nextPlayerId = state.turnOrder[currentIndex - 1];
     }
+  } else if (state.phase === "road_building_1") {
+    // 街道建設カード: 1本目の道を建設したら2本目へ
+    nextPhase = "road_building_2";
+  } else if (state.phase === "road_building_2") {
+    // 街道建設カード: 2本目の道を建設したらメインフェーズへ戻る
+    nextPhase = "main";
   }
 
   let newState: GameState = {
@@ -1829,26 +1840,19 @@ export function handleUseDevelopmentCard(
     }
 
     case "roadBuilding": {
-      // 街道建設: 2本の道を無料で建設（後でUIで処理）
+      // 街道建設: 2本の道を無料で建設
       updatedPlayers = state.players.map((p) => {
         if (p.id !== playerId) return p;
         const newCards = [...p.developmentCards];
         newCards.splice(cardIndex, 1);
         return { ...p, developmentCards: newCards };
       });
-      // 実際の道建設は別途処理（簡易実装: 道2本分の資源を付与）
-      updatedPlayers = updatedPlayers.map((p) => {
-        if (p.id !== playerId) return p;
-        return {
-          ...p,
-          resources: {
-            ...p.resources,
-            wood: p.resources.wood + 2,
-            brick: p.resources.brick + 2,
-          },
-        };
-      });
-      updatedState = { ...state, players: updatedPlayers };
+      // 道建設フェーズに移行（資源消費なしで2本の道を建設）
+      updatedState = {
+        ...state,
+        players: updatedPlayers,
+        phase: "road_building_1" as GamePhase,
+      };
       break;
     }
 
