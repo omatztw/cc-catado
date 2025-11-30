@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run dev:next\" \"npm run dev:server\"",
-    "dev:next": "next dev",
+    "dev:next": "next dev --hostname 0.0.0.0",
     "dev:server": "tsx watch server/index.ts",
     "build": "next build && tsc -p tsconfig.server.json",
-    "start": "node dist/server/index.js & next start",
+    "start": "node dist/server/index.js & next start --hostname 0.0.0.0",
     "lint": "next lint"
   },
   "dependencies": {
