@@ -1537,15 +1537,23 @@ function ActionPanel({
                       </span>
                       <button
                         onClick={() =>
-                          setDiscardResources((prev) => ({
-                            ...prev,
-                            [resource]: Math.min(
-                              currentPlayer?.resources[resource] || 0,
-                              prev[resource] + 1
-                            ),
-                          }))
+                          setDiscardResources((prev) => {
+                            const currentTotal = Object.values(prev).reduce((sum, c) => sum + c, 0);
+                            if (currentTotal >= requiredDiscard) return prev;
+                            return {
+                              ...prev,
+                              [resource]: Math.min(
+                                currentPlayer?.resources[resource] || 0,
+                                prev[resource] + 1
+                              ),
+                            };
+                          })
                         }
-                        className="w-5 h-5 bg-gray-200 rounded text-xs"
+                        disabled={
+                          currentDiscardCount >= requiredDiscard ||
+                          discardResources[resource] >= (currentPlayer?.resources[resource] || 0)
+                        }
+                        className="w-5 h-5 bg-gray-200 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         +
                       </button>
