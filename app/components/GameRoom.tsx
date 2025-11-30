@@ -1758,6 +1758,25 @@ function ActionPanel({
           </p>
         )}
       </div>
+
+      {/* 観戦者リスト（プレイヤーにも表示） */}
+      {gameState.spectators.length > 0 && (
+        <div className="mt-3 pt-3 border-t">
+          <p className="text-xs text-gray-500 mb-1">観戦者:</p>
+          <div className="flex flex-wrap gap-1">
+            {gameState.spectators.map((s) => (
+              <span
+                key={s.id}
+                className={`px-2 py-0.5 text-xs rounded bg-gray-200 text-gray-700 ${
+                  !s.isConnected ? "opacity-50" : ""
+                }`}
+              >
+                {s.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

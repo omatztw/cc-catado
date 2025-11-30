@@ -881,8 +881,14 @@ export function startGame(state: GameState): GameState {
   // ターン順をランダム化
   const turnOrder = shuffle(state.players.map((p) => p.id));
 
+  // プレイヤー配列もターン順に並び替え（UI表示用）
+  const sortedPlayers = turnOrder.map(
+    (id) => state.players.find((p) => p.id === id)!
+  );
+
   return {
     ...state,
+    players: sortedPlayers,
     phase: "setup_settlement_1",
     currentPlayerId: turnOrder[0],
     turnOrder,

@@ -310,6 +310,7 @@ async function handleCreateRoom(
         roomId: "",
         playerId: "",
         gameState: null,
+        isSpectator: false,
         error: "ログインしてください",
       });
       return;
@@ -323,6 +324,7 @@ async function handleCreateRoom(
         roomId: "",
         playerId: "",
         gameState: null,
+        isSpectator: false,
         error: "ユーザー情報が見つかりません。再度ログインしてください",
       });
       return;
@@ -334,8 +336,8 @@ async function handleCreateRoom(
     // 新しいゲーム状態を作成（作成者をホストに設定）
     let gameState = createInitialGameState(roomId, playerId);
 
-    // プレイヤーを追加
-    gameState = addPlayerToGame(gameState, playerId, playerName);
+    // 作成者も最初は観戦者として追加（席に着くまでプレイヤーにならない）
+    gameState = addSpectatorToGame(gameState, playerId, playerName);
 
     // Socket.ioルームに参加
     await socket.join(roomId);
@@ -367,12 +369,13 @@ async function handleCreateRoom(
     // ユーザーのアクティブルームを設定
     await setUserActiveRoom(playerId, roomId);
 
-    // 作成者に通知
+    // 作成者に通知（観戦者として開始）
     socket.emit("room_created", {
       success: true,
       roomId,
       playerId,
-      gameState,
+      gameState: filterStateForSpectator(gameState),
+      isSpectator: true,
     });
 
     console.log(
@@ -385,6 +388,7 @@ async function handleCreateRoom(
       roomId: "",
       playerId: "",
       gameState: null,
+      isSpectator: false,
       error: "Failed to create room",
     });
   }

@@ -260,12 +260,14 @@ export function useGameSocket(
       if (data.success && data.gameState) {
         setPlayerId(data.playerId);
         setGameState(data.gameState);
-        setIsSpectator(false); // ルーム作成者は常にプレイヤー
+        setIsSpectator(data.isSpectator); // ルーム作成者も最初は観戦者
         roomIdRef.current = data.roomId;
         setActiveRoomId(null); // ルームに参加したのでアクティブルーム表示をクリア
         setError(null);
         // セッション情報を保存（後方互換性のため）
-        const playerName = data.gameState.players.find(p => p.id === data.playerId)?.name || "";
+        const player = data.gameState.players.find(p => p.id === data.playerId);
+        const spectator = data.gameState.spectators.find(s => s.id === data.playerId);
+        const playerName = player?.name || spectator?.name || "";
         playerNameRef.current = playerName;
         saveSession({
           roomId: data.roomId,

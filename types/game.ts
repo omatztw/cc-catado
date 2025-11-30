@@ -341,6 +341,7 @@ export interface ServerToClientEvents {
     roomId: string;
     playerId: string;
     gameState: GameState | null;
+    isSpectator: boolean;
     error?: string;
   }) => void;
   // ルーム参加結果
