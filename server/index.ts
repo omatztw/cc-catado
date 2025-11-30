@@ -3,6 +3,11 @@
  * マルチインスタンス対応のリアルタイムゲームサーバー
  */
 
+import dotenv from "dotenv";
+
+// 環境変数を読み込み
+dotenv.config({ path: [".env.local", ".env"] });
+
 import { createServer } from "http";
 import { createHash } from "crypto";
 import { Server, Socket } from "socket.io";
@@ -137,15 +142,19 @@ const httpServer = createServer((req, res) => {
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: {
     origin: CORS_ORIGIN,
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "OPTIONS"],
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
   },
-  // 接続設定
-  pingTimeout: 60000,
+  // 接続設定（Safari対応で長めに設定）
+  pingTimeout: 120000,
   pingInterval: 25000,
   // トランスポート設定
-  transports: ["websocket", "polling"],
+  transports: ["polling", "websocket"],
+  // Safari対応
+  allowEIO3: true,
 });
+
 
 // ============================================
 // Redis Adapter 設定
@@ -1279,7 +1288,7 @@ async function startServer(): Promise<void> {
     await setupRedisAdapter();
 
     // HTTPサーバーを起動
-    httpServer.listen(PORT, () => {
+    httpServer.listen(PORT, "0.0.0.0", () => {
       console.log(`[Server] Socket.io server running on port ${PORT}`);
       console.log(`[Server] CORS origin: ${CORS_ORIGIN}`);
     });

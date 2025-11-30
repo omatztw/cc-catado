@@ -194,12 +194,12 @@ export function useGameSocket(
     setIsConnecting(true);
 
     const socket: GameSocket = io(serverUrl, {
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"],
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      timeout: 10000,
+      timeout: 20000,
       autoConnect: true,
     });
 
@@ -227,6 +227,7 @@ export function useGameSocket(
     socket.on("connect_error", (err) => {
       console.error("[useGameSocket] Connection error:", err.message);
       setIsConnecting(false);
+      
       setError(`接続エラー: ${err.message}`);
     });
 
