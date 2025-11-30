@@ -43,8 +43,8 @@ export function useNotification(enabled: boolean = true) {
 
     try {
       const notification = new Notification(title, {
-        icon: "/favicon.ico",
-        badge: "/favicon.ico",
+        icon: "/favicon.svg",
+        badge: "/favicon.svg",
         ...options,
       });
 

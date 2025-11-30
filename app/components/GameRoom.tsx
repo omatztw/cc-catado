@@ -10,6 +10,7 @@ import { useSearchParams } from "next/navigation";
 import { useGameSocket, useCurrentPlayer, useIsMyTurn, SessionInfo } from "../hooks/useGameSocket";
 import { useSound } from "../hooks/useSound";
 import { useNotification } from "../hooks/useNotification";
+import { useFavicon } from "../hooks/useFavicon";
 import { useGameSettings } from "../hooks/useGameSettings";
 import { GameBoard } from "./GameBoard";
 import type {
@@ -1907,6 +1908,7 @@ export function GameRoom() {
   const { settings, toggleSound, toggleNotification } = useGameSettings();
   const { playSound } = useSound(settings.soundEnabled);
   const { notifyTurn, requestPermission, permission, isSupported: isNotificationSupported } = useNotification(settings.notificationEnabled);
+  const { startNotification: startFaviconNotification, stopNotification: stopFaviconNotification } = useFavicon();
 
   // 前回のゲーム状態を追跡（変更検知用）
   const prevGameStateRef = useRef<GameState | null>(null);
@@ -1927,6 +1929,18 @@ export function GameRoom() {
     ) {
       playSound("turnStart");
       notifyTurn();
+      // ページが非アクティブな場合はfavicon通知を開始
+      if (document.visibilityState !== "visible") {
+        startFaviconNotification();
+      }
+    }
+
+    // 自分のターンが終わった時はfavicon通知を停止
+    if (
+      prevCurrentPlayerId === playerId &&
+      gameState.currentPlayerId !== playerId
+    ) {
+      stopFaviconNotification();
     }
 
     // サイコロが振られた時
@@ -1952,7 +1966,7 @@ export function GameRoom() {
     // 状態を更新
     prevGameStateRef.current = gameState;
     prevCurrentPlayerIdRef.current = gameState.currentPlayerId;
-  }, [gameState, playerId, playSound, notifyTurn]);
+  }, [gameState, playerId, playSound, notifyTurn, startFaviconNotification, stopFaviconNotification]);
 
   // 選択可能な要素（観戦者は何も選択できない）
   const selectableIntersections = useMemo(() => {
