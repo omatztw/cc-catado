@@ -12,6 +12,7 @@ import { useSound } from "../hooks/useSound";
 import { useNotification } from "../hooks/useNotification";
 import { useGameSettings } from "../hooks/useGameSettings";
 import { GameBoard } from "./GameBoard";
+import { GameLog } from "./GameLog";
 import type {
   GameState,
   GamePhase,
@@ -2281,6 +2282,15 @@ export function GameRoom() {
                 onTakeSeat={takeSeat}
                 onLeaveSeat={leaveSeat}
               />
+            )}
+            {/* ゲームログ */}
+            {gameState.logs && gameState.logs.length > 0 && (
+              <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+                <div className="px-4 py-2 border-b border-gray-700">
+                  <h3 className="font-semibold text-white">ゲームログ</h3>
+                </div>
+                <GameLog logs={gameState.logs} maxHeight="250px" />
+              </div>
             )}
             <ChatPanel
               messages={chatMessages}

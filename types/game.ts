@@ -274,6 +274,8 @@ export interface GameState {
   largestArmyPlayerId: string | null;
   // 勝者（ゲーム終了時のみ）
   winnerId: string | null;
+  // ゲームログ
+  logs: GameLogEntry[];
   // 作成日時
   createdAt: string;
   // 最終更新日時
@@ -559,3 +561,73 @@ export const INITIAL_PIECES = {
  * 勝利に必要な勝利点
  */
 export const VICTORY_POINTS_TO_WIN = 10;
+
+// ============================================
+// ゲームログ
+// ============================================
+
+/**
+ * ゲームログエントリの種類
+ */
+export type GameLogType =
+  | "game_start" // ゲーム開始
+  | "turn_start" // ターン開始
+  | "dice_roll" // サイコロの出目
+  | "resource_gain" // 資源獲得
+  | "build_settlement" // 開拓地建設
+  | "build_city" // 都市建設
+  | "build_road" // 道路建設
+  | "buy_development_card" // 発展カード購入
+  | "use_knight" // 騎士カード使用
+  | "use_road_building" // 街道建設カード使用
+  | "use_year_of_plenty" // 収穫カード使用
+  | "use_monopoly" // 独占カード使用
+  | "move_robber" // 盗賊移動
+  | "steal_resource" // 資源略奪
+  | "discard_resources" // 資源破棄
+  | "trade_with_bank" // 銀行交易
+  | "player_trade" // プレイヤー間交易
+  | "longest_road" // 最長交易路獲得
+  | "largest_army" // 最大騎士力獲得
+  | "game_end"; // ゲーム終了
+
+/**
+ * ゲームログエントリ
+ */
+export interface GameLogEntry {
+  id: string;
+  type: GameLogType;
+  playerId: string;
+  playerName: string;
+  playerColor: PlayerColor;
+  timestamp: string;
+  // ログ固有のデータ
+  data?: {
+    // サイコロの出目
+    die1?: number;
+    die2?: number;
+    total?: number;
+    // 建設関連
+    buildingType?: BuildingType | "road";
+    // 資源関連
+    resource?: HoldableResource;
+    resources?: Partial<PlayerResources>;
+    amount?: number;
+    // 発展カード関連
+    cardType?: DevelopmentCardType;
+    // 盗賊・略奪関連
+    targetPlayerId?: string;
+    targetPlayerName?: string;
+    stolenResource?: HoldableResource;
+    // 交易関連
+    give?: { resource: HoldableResource; amount: number };
+    receive?: HoldableResource;
+    offering?: Partial<PlayerResources>;
+    requesting?: Partial<PlayerResources>;
+    tradePartnerId?: string;
+    tradePartnerName?: string;
+    // 勝利関連
+    winnerId?: string;
+    winnerName?: string;
+  };
+}
