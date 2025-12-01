@@ -280,6 +280,8 @@ export interface GameState {
   createdAt: string;
   // 最終更新日時
   updatedAt: string;
+  // テスト用シナリオデータ（オプション、本番では undefined）
+  testScenario?: TestScenario;
 }
 
 // ============================================
@@ -630,4 +632,51 @@ export interface GameLogEntry {
     winnerId?: string;
     winnerName?: string;
   };
+}
+
+// ============================================
+// テストシナリオ
+// ============================================
+
+/**
+ * テスト用シナリオデータ
+ * ランダム要素を確定的にするためのデータ構造
+ */
+export interface TestScenario {
+  /**
+   * サイコロの出目キュー
+   * 順番に消費され、空になったら通常のランダム処理にフォールバック
+   */
+  diceRolls?: Array<{ die1: number; die2: number }>;
+
+  /**
+   * 発展カードの順序
+   * シャッフルせずこの順番でデッキを構成
+   */
+  developmentCardOrder?: DevelopmentCardType[];
+
+  /**
+   * ボード配置
+   * タイルの地形と数字トークンの固定配置
+   */
+  boardSetup?: {
+    /** 地形タイプの配列（19個、砂漠含む） */
+    terrains: ResourceType[];
+    /** 数字トークンの配列（砂漠はnull） */
+    numberTokens: (number | null)[];
+  };
+
+  /**
+   * ターン順
+   * シャッフルせずこの順番でターンを進行
+   * プレイヤーIDの配列
+   */
+  turnOrder?: string[];
+
+  /**
+   * 略奪時の資源選択インデックス
+   * 盗賊で資源を奪う際、利用可能な資源配列から選択するインデックス
+   * 順番に消費され、空になったら通常のランダム処理にフォールバック
+   */
+  stealIndices?: number[];
 }

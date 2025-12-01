@@ -24,6 +24,7 @@ import type {
   TradeOffer,
   GameLogEntry,
   GameLogType,
+  TestScenario,
 } from "@/types/game";
 import {
   INITIAL_RESOURCES,
@@ -60,6 +61,26 @@ function addLog(state: GameState, log: GameLogEntry): GameState {
   return {
     ...state,
     logs: [...(state.logs || []), log],
+  };
+}
+
+/**
+ * テストシナリオを深いコピーする
+ * diceRollsなどの配列がミュータブルに操作されるため、
+ * 各ゲームで独立したコピーを持つ必要がある
+ */
+function deepCloneScenario(scenario?: TestScenario): TestScenario | undefined {
+  if (!scenario) return undefined;
+  return {
+    ...scenario,
+    diceRolls: scenario.diceRolls ? [...scenario.diceRolls.map(r => ({ ...r }))] : undefined,
+    developmentCardOrder: scenario.developmentCardOrder ? [...scenario.developmentCardOrder] : undefined,
+    boardSetup: scenario.boardSetup ? {
+      terrains: [...scenario.boardSetup.terrains],
+      numberTokens: [...scenario.boardSetup.numberTokens],
+    } : undefined,
+    turnOrder: scenario.turnOrder ? [...scenario.turnOrder] : undefined,
+    stealIndices: scenario.stealIndices ? [...scenario.stealIndices] : undefined,
   };
 }
 
@@ -342,8 +363,16 @@ function parseEdgeId(id: string): EdgeCoordinate | null {
 
 /**
  * サイコロを振る
+ * @param scenario テストシナリオ（オプション）。指定されていればキューから値を取得
  */
-export function rollDice(): DiceResult {
+export function rollDice(scenario?: TestScenario): DiceResult {
+  // シナリオにダイスロールが定義されていればキューから取得
+  if (scenario?.diceRolls && scenario.diceRolls.length > 0) {
+    const roll = scenario.diceRolls.shift()!;
+    return { die1: roll.die1, die2: roll.die2, total: roll.die1 + roll.die2 };
+  }
+
+  // 通常のランダム処理
   const die1 = Math.floor(Math.random() * 6) + 1;
   const die2 = Math.floor(Math.random() * 6) + 1;
   return { die1, die2, total: die1 + die2 };
@@ -355,10 +384,16 @@ export function rollDice(): DiceResult {
 
 /**
  * 六角形タイルを生成
+ * @param scenario テストシナリオ（オプション）。boardSetupが定義されていれば固定配置を使用
  */
-function generateHexes(): Hex[] {
-  const terrains = shuffle(STANDARD_TERRAIN);
-  const numberTokens = [...STANDARD_NUMBER_TOKENS];
+function generateHexes(scenario?: TestScenario): Hex[] {
+  // シナリオにボード設定が定義されていればそれを使用
+  const terrains = scenario?.boardSetup?.terrains
+    ? [...scenario.boardSetup.terrains]
+    : shuffle(STANDARD_TERRAIN);
+  const numberTokens = scenario?.boardSetup?.numberTokens
+    ? [...scenario.boardSetup.numberTokens]
+    : [...STANDARD_NUMBER_TOKENS];
 
   const hexes: Hex[] = [];
   let tokenIndex = 0;
@@ -368,11 +403,18 @@ function generateHexes(): Hex[] {
     const terrain = terrains[i];
     const isDesert = terrain === "desert";
 
+    // シナリオの場合は numberTokens 配列から直接取得（砂漠はnull）
+    const token = scenario?.boardSetup?.numberTokens
+      ? numberTokens[i]
+      : isDesert
+        ? null
+        : numberTokens[tokenIndex++];
+
     hexes.push({
       id: cubeToId(coord),
       coordinate: coord,
       resourceType: terrain,
-      numberToken: isDesert ? null : numberTokens[tokenIndex++],
+      numberToken: token,
       hasRobber: isDesert, // 砂漠に盗賊を初期配置
     });
   }
@@ -485,12 +527,23 @@ function generateEdges(hexes: Hex[]): Edge[] {
 
 /**
  * 新しいゲーム状態を作成
+ * @param roomId ルームID
+ * @param hostId ホストのプレイヤーID
+ * @param scenario テストシナリオ（オプション）
  */
-export function createInitialGameState(roomId: string, hostId: string): GameState {
-  const hexes = generateHexes();
+export function createInitialGameState(
+  roomId: string,
+  hostId: string,
+  scenario?: TestScenario
+): GameState {
+  const hexes = generateHexes(scenario);
   const intersections = generateIntersections(hexes);
   const edges = generateEdges(hexes);
-  const developmentCardDeck = shuffle([...DEVELOPMENT_CARD_DECK]);
+
+  // シナリオに発展カード順序が定義されていればそれを使用
+  const developmentCardDeck = scenario?.developmentCardOrder
+    ? [...scenario.developmentCardOrder]
+    : shuffle([...DEVELOPMENT_CARD_DECK]);
 
   return {
     id: roomId,
@@ -515,17 +568,24 @@ export function createInitialGameState(roomId: string, hostId: string): GameStat
     logs: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    testScenario: deepCloneScenario(scenario),
   };
 }
 
 /**
  * ゲーム状態をリセットする（hostIdと既存プレイヤーを維持）
+ * @param state 現在のゲーム状態
+ * @param scenario テストシナリオ（オプション）
  */
-export function resetGameState(state: GameState): GameState {
-  const hexes = generateHexes();
+export function resetGameState(state: GameState, scenario?: TestScenario): GameState {
+  const hexes = generateHexes(scenario);
   const intersections = generateIntersections(hexes);
   const edges = generateEdges(hexes);
-  const developmentCardDeck = shuffle([...DEVELOPMENT_CARD_DECK]);
+
+  // シナリオに発展カード順序が定義されていればそれを使用
+  const developmentCardDeck = scenario?.developmentCardOrder
+    ? [...scenario.developmentCardOrder]
+    : shuffle([...DEVELOPMENT_CARD_DECK]);
 
   // プレイヤーの状態をリセット
   const resetPlayers = state.players.map((player) => ({
@@ -566,6 +626,7 @@ export function resetGameState(state: GameState): GameState {
     logs: [],
     createdAt: state.createdAt,
     updatedAt: new Date().toISOString(),
+    testScenario: deepCloneScenario(scenario),
   };
 }
 
@@ -910,8 +971,10 @@ export function startGame(state: GameState): GameState {
     throw new Error("Game has already started");
   }
 
-  // ターン順をランダム化
-  const turnOrder = shuffle(state.players.map((p) => p.id));
+  // シナリオにターン順が定義されていればそれを使用、なければランダム化
+  const turnOrder = state.testScenario?.turnOrder
+    ? [...state.testScenario.turnOrder]
+    : shuffle(state.players.map((p) => p.id));
 
   // プレイヤー配列もターン順に並び替え（UI表示用）
   const sortedPlayers = turnOrder.map(
@@ -954,7 +1017,7 @@ export function handleRollDice(
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error("Player not found");
 
-  const diceResult = rollDice();
+  const diceResult = rollDice(state.testScenario);
 
   // サイコロログを追加
   const diceLog = createLogEntry("dice_roll", player, {
@@ -1567,8 +1630,18 @@ export function handleStealResource(
   let stolenResource: HoldableResource | undefined;
 
   if (availableResources.length > 0) {
-    stolenResource =
-      availableResources[Math.floor(Math.random() * availableResources.length)];
+    // シナリオにstealIndicesが定義されていればキューから取得、なければランダム
+    let stealIndex: number;
+    if (state.testScenario?.stealIndices && state.testScenario.stealIndices.length > 0) {
+      stealIndex = state.testScenario.stealIndices.shift()!;
+      // インデックスが範囲外の場合は0に補正
+      if (stealIndex >= availableResources.length) {
+        stealIndex = 0;
+      }
+    } else {
+      stealIndex = Math.floor(Math.random() * availableResources.length);
+    }
+    stolenResource = availableResources[stealIndex];
 
     updatedPlayers = state.players.map((p) => {
       if (p.id === playerId) {
