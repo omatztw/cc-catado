@@ -136,6 +136,62 @@ Socket.io サーバーのヘルスチェック:
 curl http://localhost:3001/health
 ```
 
+## MCP サーバー（AI対戦用）
+
+MCPサーバーを使用すると、Claude等のAIがカタンをプレイできます。
+
+### セットアップ
+
+Claude Desktop の設定ファイル（`claude_desktop_config.json`）に以下を追加:
+
+```json
+{
+  "mcpServers": {
+    "catan": {
+      "command": "npm",
+      "args": ["run", "mcp"],
+      "cwd": "/path/to/cc-catado"
+    }
+  }
+}
+```
+
+### 利用可能なツール
+
+| ツール | 説明 |
+|--------|------|
+| `create_game` | 新しいゲームを作成（AI vs CPU） |
+| `start_game` | ゲームを開始 |
+| `get_game_state` | 現在の状態を取得 |
+| `get_available_actions` | 実行可能なアクションを取得 |
+| `roll_dice` | サイコロを振る |
+| `build_settlement` | 開拓地を建設 |
+| `build_city` | 都市を建設 |
+| `build_road` | 道を建設 |
+| `move_robber` | 盗賊を移動 |
+| `steal_resource` | 資源を奪う |
+| `discard_resources` | 資源を破棄 |
+| `buy_development_card` | 発展カードを購入 |
+| `use_development_card` | 発展カードを使用 |
+| `trade_with_bank` | 銀行と交易 |
+| `end_turn` | ターン終了 |
+| `run_until_my_turn` | CPUターンを自動実行 |
+
+### 利用可能なリソース
+
+- `catan://rules` - カタンの完全なルール
+- `catan://strategy` - 戦略ガイド
+
+### 使い方例
+
+Claude Desktopで以下のように会話:
+
+```
+カタンのゲームを作成して、プレイしてみてください。
+```
+
+AIがゲームを作成し、ルールに従ってプレイします。
+
 ## ライセンス
 
 MIT
