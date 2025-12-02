@@ -156,7 +156,7 @@ Claude Desktop の設定ファイル（`claude_desktop_config.json`）に以下�
 }
 ```
 
-### 利用可能なツール
+### スタンドアロンモード（AI vs CPU）
 
 | ツール | 説明 |
 |--------|------|
@@ -177,6 +177,22 @@ Claude Desktop の設定ファイル（`claude_desktop_config.json`）に以下�
 | `end_turn` | ターン終了 |
 | `run_until_my_turn` | CPUターンを自動実行 |
 
+### リモートモード（人間と対戦）
+
+| ツール | 説明 |
+|--------|------|
+| `remote_connect` | リモートサーバーに接続 |
+| `remote_disconnect` | サーバーから切断 |
+| `remote_login` | サーバーにログイン |
+| `remote_list_rooms` | 公開ルーム一覧を取得 |
+| `remote_create_room` | 新しいルームを作成 |
+| `remote_join_room` | 既存のルームに参加 |
+| `remote_get_state` | ゲーム状態を取得 |
+| `remote_get_actions` | 実行可能なアクションを取得 |
+| `remote_action` | アクションを実行 |
+| `remote_wait_for_turn` | 自分のターンまで待機 |
+| `remote_chat` | チャットを送信 |
+
 ### 利用可能なリソース
 
 - `catan://rules` - カタンの完全なルール
@@ -184,10 +200,16 @@ Claude Desktop の設定ファイル（`claude_desktop_config.json`）に以下�
 
 ### 使い方例
 
-Claude Desktopで以下のように会話:
-
+**スタンドアロンモード（AI vs CPU）:**
 ```
 カタンのゲームを作成して、プレイしてみてください。
+```
+
+**リモートモード（人間と対戦）:**
+```
+リモートサーバー http://example.com:3001 に接続して、
+「AI対戦部屋」というルームを作成してください。
+人間プレイヤーが参加したらゲームを開始します。
 ```
 
 AIがゲームを作成し、ルールに従ってプレイします。
