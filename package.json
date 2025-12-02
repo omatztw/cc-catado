@@ -11,9 +11,11 @@
     "lint": "next lint",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "mcp": "tsx server/mcp/index.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.1",
     "@socket.io/redis-adapter": "^8.3.0",
     "ioredis": "^5.4.1",
     "next": "14.2.18",
