@@ -741,6 +741,7 @@ function PlayerPanel({
     >
       <div className="flex items-center justify-between mb-2">
         <span className="font-semibold text-gray-800">
+          {player.isAI && <span title="CPUプレイヤー">🤖 </span>}
           {player.name}
           {isSelf && " (あなた)"}
         </span>
@@ -842,6 +843,8 @@ function ActionPanel({
   onResetGame,
   onTakeSeat,
   onLeaveSeat,
+  onAddCpuPlayer,
+  onRemoveCpuPlayer,
 }: {
   gameState: GameState;
   playerId: string;
@@ -850,6 +853,8 @@ function ActionPanel({
   onResetGame: () => void;
   onTakeSeat: () => void;
   onLeaveSeat: () => void;
+  onAddCpuPlayer?: () => void;
+  onRemoveCpuPlayer?: (cpuPlayerId: string) => void;
 }) {
   const isMyTurn = gameState.currentPlayerId === playerId;
   const phase = gameState.phase;
@@ -1104,6 +1109,34 @@ function ActionPanel({
           )
         )}
 
+        {/* CPU追加ボタン（ホストのみ） */}
+        {isHost && !isSpectator && gameState.players.length < 4 && onAddCpuPlayer && (
+          <button
+            onClick={onAddCpuPlayer}
+            className="w-full py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition"
+          >
+            + CPUプレイヤーを追加
+          </button>
+        )}
+
+        {/* CPUプレイヤー一覧と削除ボタン（ホストのみ） */}
+        {isHost && !isSpectator && gameState.players.filter(p => p.isAI).length > 0 && onRemoveCpuPlayer && (
+          <div className="bg-purple-50 p-2 rounded-lg space-y-1">
+            <p className="text-xs text-purple-700 font-medium">CPUプレイヤー:</p>
+            {gameState.players.filter(p => p.isAI).map(cpu => (
+              <div key={cpu.id} className="flex items-center justify-between">
+                <span className="text-sm text-purple-800">{cpu.name}</span>
+                <button
+                  onClick={() => onRemoveCpuPlayer(cpu.id)}
+                  className="px-2 py-0.5 text-xs bg-red-500 text-white rounded hover:bg-red-600 transition"
+                >
+                  削除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* ゲーム開始ボタン（プレイヤーのみ） */}
         {!isSpectator && canStartGame && (
           <button
@@ -1116,7 +1149,7 @@ function ActionPanel({
 
         {!isSpectator && gameState.players.length < 3 && (
           <p className="text-xs text-gray-500">
-            ゲームを開始するには3人以上必要です
+            ゲームを開始するには3人以上必要です（CPUも追加可能）
           </p>
         )}
 
@@ -1913,6 +1946,8 @@ export function GameRoom() {
     sendChatMessage,
     resetGame,
     clearSavedSession,
+    addCpuPlayer,
+    removeCpuPlayer,
   } = useGameSocket();
 
   // ゲーム設定（効果音・通知）
@@ -2281,6 +2316,8 @@ export function GameRoom() {
                 onResetGame={resetGame}
                 onTakeSeat={takeSeat}
                 onLeaveSeat={leaveSeat}
+                onAddCpuPlayer={addCpuPlayer}
+                onRemoveCpuPlayer={removeCpuPlayer}
               />
             )}
             {/* ゲームログ */}
