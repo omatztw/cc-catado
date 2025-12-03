@@ -1,6 +1,6 @@
 /**
  * AI クライアント
- * Gemini / DeepSeek API を使用してゲームアクションを決定
+ * Gemini / DeepSeek / OpenRouter API を使用してゲームアクションを決定
  */
 
 import {
@@ -16,12 +16,14 @@ import { CATAN_RULES, CATAN_STRATEGY } from "../mcp/resources";
 const DEFAULT_MODELS: Record<AIProvider, string> = {
   gemini: "gemini-2.0-flash-exp",
   deepseek: "deepseek-chat",
+  openrouter: "google/gemini-2.0-flash-exp:free",
 };
 
 // API エンドポイント
 const API_ENDPOINTS: Record<AIProvider, string> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta/models",
   deepseek: "https://api.deepseek.com/v1/chat/completions",
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
 };
 
 /**
@@ -175,6 +177,8 @@ JSONで回答してください。以下の形式のみ使用可能です:
   private async callAPI(prompt: string): Promise<string> {
     if (this.config.provider === "gemini") {
       return this.callGeminiAPI(prompt);
+    } else if (this.config.provider === "openrouter") {
+      return this.callOpenRouterAPI(prompt);
     } else {
       return this.callDeepSeekAPI(prompt);
     }
@@ -267,6 +271,58 @@ JSONで回答してください。以下の形式のみ使用可能です:
 
     if (!text) {
       throw new Error("No response from DeepSeek API");
+    }
+
+    return text;
+  }
+
+  /**
+   * OpenRouter API を呼び出し
+   * OpenAI互換のAPIフォーマットを使用
+   */
+  private async callOpenRouterAPI(prompt: string): Promise<string> {
+    const url = API_ENDPOINTS.openrouter;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.config.apiKey}`,
+        "HTTP-Referer": "https://github.com/omatztw/cc-catado",
+        "X-Title": "Catan AI Player",
+      },
+      body: JSON.stringify({
+        model: this.config.model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "あなたはカタンをプレイするAIです。JSONで回答してください。",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 1024,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{
+        message?: { content?: string };
+      }>;
+    };
+    const text = data.choices?.[0]?.message?.content;
+
+    if (!text) {
+      throw new Error("No response from OpenRouter API");
     }
 
     return text;
@@ -375,10 +431,18 @@ export function getAIClient(): AIClient | null {
 
   // 環境変数から設定を読み込み
   const provider = (process.env.AI_PROVIDER as AIProvider) || "gemini";
-  const apiKey =
-    provider === "gemini"
-      ? process.env.GEMINI_API_KEY
-      : process.env.DEEPSEEK_API_KEY;
+  let apiKey: string | undefined;
+  switch (provider) {
+    case "gemini":
+      apiKey = process.env.GEMINI_API_KEY;
+      break;
+    case "deepseek":
+      apiKey = process.env.DEEPSEEK_API_KEY;
+      break;
+    case "openrouter":
+      apiKey = process.env.OPENROUTER_API_KEY;
+      break;
+  }
 
   if (!apiKey) {
     console.warn(

@@ -706,7 +706,7 @@ export interface TestScenario {
 /**
  * AIプロバイダーの種類
  */
-export type AIProvider = "gemini" | "deepseek";
+export type AIProvider = "gemini" | "deepseek" | "openrouter";
 
 /**
  * AI設定
