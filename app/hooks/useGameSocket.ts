@@ -96,6 +96,10 @@ export interface UseGameSocketReturn {
   reconnect: () => void;
   /** 保存されたセッションをクリア */
   clearSavedSession: () => void;
+  /** CPUプレイヤーを追加（ホストのみ） */
+  addCpuPlayer: () => void;
+  /** CPUプレイヤーを削除（ホストのみ） */
+  removeCpuPlayer: (cpuPlayerId: string) => void;
 }
 
 // ============================================
@@ -408,6 +412,22 @@ export function useGameSocket(
       setError(data.message);
     });
 
+    socket.on("cpu_player_added", (data) => {
+      console.log("[useGameSocket] CPU player added:", data);
+      if (!data.success) {
+        setError(data.error || "CPUプレイヤーの追加に失敗しました");
+        setTimeout(() => setError(null), 3000);
+      }
+    });
+
+    socket.on("cpu_player_removed", (data) => {
+      console.log("[useGameSocket] CPU player removed:", data);
+      if (!data.success) {
+        setError(data.error || "CPUプレイヤーの削除に失敗しました");
+        setTimeout(() => setError(null), 3000);
+      }
+    });
+
     socketRef.current = socket;
     return socket;
   }, [serverUrl]);
@@ -625,6 +645,33 @@ export function useGameSocket(
   }, []);
 
   /**
+   * CPUプレイヤーを追加（ホストのみ）
+   */
+  const addCpuPlayer = useCallback(() => {
+    if (!socketRef.current || !roomIdRef.current) {
+      setError("サーバーに接続されていません");
+      return;
+    }
+
+    socketRef.current.emit("add_cpu_player", { roomId: roomIdRef.current });
+  }, []);
+
+  /**
+   * CPUプレイヤーを削除（ホストのみ）
+   */
+  const removeCpuPlayer = useCallback((cpuPlayerId: string) => {
+    if (!socketRef.current || !roomIdRef.current) {
+      setError("サーバーに接続されていません");
+      return;
+    }
+
+    socketRef.current.emit("remove_cpu_player", {
+      roomId: roomIdRef.current,
+      playerId: cpuPlayerId,
+    });
+  }, []);
+
+  /**
    * 接続を再試行
    */
   const reconnect = useCallback(() => {
@@ -687,6 +734,8 @@ export function useGameSocket(
     resetGame,
     reconnect,
     clearSavedSession,
+    addCpuPlayer,
+    removeCpuPlayer,
   };
 }
 

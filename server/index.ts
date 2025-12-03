@@ -64,6 +64,13 @@ import {
   resetGameState,
 } from "./game-logic";
 
+import {
+  createCPUPlayer,
+  isAIPlayer,
+  executeAITurn,
+  isAIAvailable,
+} from "./ai";
+
 // ============================================
 // 設定
 // ============================================
@@ -868,6 +875,11 @@ async function handleGameAction(
       console.log(
         `[Server] Game over! Winner: ${gameState.winnerId} in room ${roomId}`
       );
+    } else {
+      // AIプレイヤーのターンを自動実行（遅延を入れて非同期で）
+      setTimeout(() => {
+        executeAITurnIfNeeded(roomId);
+      }, 1000);
     }
   } catch (error) {
     console.error("[Server] Error in handleGameAction:", error);
@@ -1132,6 +1144,351 @@ async function handleResetGame(
 }
 
 /**
+ * CPUプレイヤー追加ハンドラー（ホストのみ）
+ */
+async function handleAddCpuPlayer(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: { roomId: string }
+): Promise<void> {
+  const { roomId } = data;
+
+  try {
+    const playerId = await getPlayerIdBySocket(socket.id);
+
+    if (!playerId) {
+      socket.emit("cpu_player_added", {
+        success: false,
+        error: "プレイヤーが見つかりません",
+      });
+      return;
+    }
+
+    // ゲーム状態を取得
+    const gameState = await getGameState(roomId);
+
+    if (!gameState) {
+      socket.emit("cpu_player_added", {
+        success: false,
+        error: "ゲームが見つかりません",
+      });
+      return;
+    }
+
+    // ホストかどうか確認
+    if (gameState.hostId !== playerId) {
+      socket.emit("cpu_player_added", {
+        success: false,
+        error: "CPUプレイヤーを追加できるのはホストのみです",
+      });
+      return;
+    }
+
+    // 待機中かどうか確認
+    if (gameState.phase !== "waiting") {
+      socket.emit("cpu_player_added", {
+        success: false,
+        error: "ゲーム開始後はCPUプレイヤーを追加できません",
+      });
+      return;
+    }
+
+    // AIが利用可能か確認
+    if (!isAIAvailable()) {
+      socket.emit("cpu_player_added", {
+        success: false,
+        error: "AIが利用できません。サーバー設定を確認してください。",
+      });
+      return;
+    }
+
+    // プレイヤー数チェック
+    if (gameState.players.length >= 4) {
+      socket.emit("cpu_player_added", {
+        success: false,
+        error: "プレイヤーは最大4人までです",
+      });
+      return;
+    }
+
+    // CPUプレイヤーを作成
+    const cpuPlayer = createCPUPlayer(gameState.players);
+
+    if (!cpuPlayer) {
+      socket.emit("cpu_player_added", {
+        success: false,
+        error: "CPUプレイヤーの作成に失敗しました",
+      });
+      return;
+    }
+
+    // ゲーム状態を更新
+    const newGameState = {
+      ...gameState,
+      players: [...gameState.players, cpuPlayer],
+      updatedAt: new Date().toISOString(),
+    };
+
+    await saveGameState(roomId, newGameState);
+
+    // ルーム情報を更新
+    const existingRoomInfo = await getRoomInfo(roomId);
+    if (existingRoomInfo) {
+      const roomInfo: RoomInfo = {
+        ...existingRoomInfo,
+        playerCount: newGameState.players.length,
+      };
+      await saveRoomInfo(roomId, roomInfo);
+    }
+
+    // 成功を通知
+    socket.emit("cpu_player_added", {
+      success: true,
+      player: cpuPlayer,
+    });
+
+    // ルーム全体に更新された状態を送信
+    await broadcastGameState(roomId, newGameState);
+
+    console.log(
+      `[Server] CPU player ${cpuPlayer.name} added to room ${roomId} by host ${playerId}`
+    );
+  } catch (error) {
+    console.error("[Server] Error in handleAddCpuPlayer:", error);
+    socket.emit("cpu_player_added", {
+      success: false,
+      error: "CPUプレイヤーの追加に失敗しました",
+    });
+  }
+}
+
+/**
+ * CPUプレイヤー削除ハンドラー（ホストのみ）
+ */
+async function handleRemoveCpuPlayer(
+  socket: Socket<ClientToServerEvents, ServerToClientEvents>,
+  data: { roomId: string; playerId: string }
+): Promise<void> {
+  const { roomId, playerId: cpuPlayerId } = data;
+
+  try {
+    const playerId = await getPlayerIdBySocket(socket.id);
+
+    if (!playerId) {
+      socket.emit("cpu_player_removed", {
+        success: false,
+        error: "プレイヤーが見つかりません",
+      });
+      return;
+    }
+
+    // ゲーム状態を取得
+    const gameState = await getGameState(roomId);
+
+    if (!gameState) {
+      socket.emit("cpu_player_removed", {
+        success: false,
+        error: "ゲームが見つかりません",
+      });
+      return;
+    }
+
+    // ホストかどうか確認
+    if (gameState.hostId !== playerId) {
+      socket.emit("cpu_player_removed", {
+        success: false,
+        error: "CPUプレイヤーを削除できるのはホストのみです",
+      });
+      return;
+    }
+
+    // 待機中かどうか確認
+    if (gameState.phase !== "waiting") {
+      socket.emit("cpu_player_removed", {
+        success: false,
+        error: "ゲーム開始後はCPUプレイヤーを削除できません",
+      });
+      return;
+    }
+
+    // 対象プレイヤーがCPUか確認
+    const cpuPlayer = gameState.players.find((p) => p.id === cpuPlayerId);
+    if (!cpuPlayer || !isAIPlayer(cpuPlayer)) {
+      socket.emit("cpu_player_removed", {
+        success: false,
+        error: "指定されたプレイヤーはCPUではありません",
+      });
+      return;
+    }
+
+    // CPUプレイヤーを削除
+    const newGameState = {
+      ...gameState,
+      players: gameState.players.filter((p) => p.id !== cpuPlayerId),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await saveGameState(roomId, newGameState);
+
+    // ルーム情報を更新
+    const existingRoomInfo = await getRoomInfo(roomId);
+    if (existingRoomInfo) {
+      const roomInfo: RoomInfo = {
+        ...existingRoomInfo,
+        playerCount: newGameState.players.length,
+      };
+      await saveRoomInfo(roomId, roomInfo);
+    }
+
+    // 成功を通知
+    socket.emit("cpu_player_removed", {
+      success: true,
+      playerId: cpuPlayerId,
+    });
+
+    // ルーム全体に更新された状態を送信
+    await broadcastGameState(roomId, newGameState);
+
+    console.log(
+      `[Server] CPU player ${cpuPlayer.name} removed from room ${roomId} by host ${playerId}`
+    );
+  } catch (error) {
+    console.error("[Server] Error in handleRemoveCpuPlayer:", error);
+    socket.emit("cpu_player_removed", {
+      success: false,
+      error: "CPUプレイヤーの削除に失敗しました",
+    });
+  }
+}
+
+/**
+ * AIプレイヤーのターンを自動実行
+ * ゲーム状態が変わった後に呼び出される
+ */
+async function executeAITurnIfNeeded(roomId: string): Promise<void> {
+  try {
+    let gameState = await getGameState(roomId);
+    if (!gameState) return;
+
+    // ゲームが終了している場合は何もしない
+    if (gameState.phase === "game_over" || gameState.phase === "waiting") {
+      return;
+    }
+
+    // 現在のプレイヤーを取得
+    const currentPlayerId = gameState.currentPlayerId;
+    const currentPlayer = gameState.players.find(
+      (p) => p.id === currentPlayerId
+    );
+
+    // AIプレイヤーでなければ何もしない
+    if (!currentPlayer || !isAIPlayer(currentPlayer)) {
+      // discardフェーズの場合は、破棄が必要なAIプレイヤーをチェック
+      if (gameState.phase === "discard") {
+        await executeAIDiscardIfNeeded(roomId, gameState);
+      }
+      return;
+    }
+
+    console.log(
+      `[Server] Executing AI turn for ${currentPlayer.name} in room ${roomId}`
+    );
+
+    // AIのアクションを実行
+    const action = await executeAITurn(gameState, currentPlayer.id);
+
+    if (!action) {
+      console.error(
+        `[Server] AI ${currentPlayer.name} failed to decide action`
+      );
+      return;
+    }
+
+    // アクションを処理
+    try {
+      gameState = processGameAction(gameState, action, currentPlayer.id);
+    } catch (error) {
+      console.error(
+        `[Server] AI action failed: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+      return;
+    }
+
+    // 状態を保存
+    await saveGameState(roomId, gameState);
+
+    // ルーム全体に更新を配信
+    await broadcastGameState(roomId, gameState);
+
+    console.log(
+      `[Server] AI ${currentPlayer.name} executed: ${action.type}`
+    );
+
+    // 次のAIターンがあれば再帰的に実行（少し遅延を入れる）
+    setTimeout(() => {
+      executeAITurnIfNeeded(roomId);
+    }, 500);
+  } catch (error) {
+    console.error("[Server] Error in executeAITurnIfNeeded:", error);
+  }
+}
+
+/**
+ * discardフェーズでAIプレイヤーの破棄を自動実行
+ */
+async function executeAIDiscardIfNeeded(
+  roomId: string,
+  gameState: GameState
+): Promise<void> {
+  // 破棄が必要なAIプレイヤーを探す
+  for (const player of gameState.players) {
+    if (!isAIPlayer(player)) continue;
+
+    const totalResources = Object.values(player.resources).reduce(
+      (a, b) => a + b,
+      0
+    );
+    if (totalResources <= 7) continue;
+
+    console.log(
+      `[Server] AI ${player.name} needs to discard resources in room ${roomId}`
+    );
+
+    // AIのアクションを実行
+    const action = await executeAITurn(gameState, player.id);
+
+    if (!action) {
+      console.error(
+        `[Server] AI ${player.name} failed to decide discard action`
+      );
+      continue;
+    }
+
+    // アクションを処理
+    try {
+      gameState = processGameAction(gameState, action, player.id);
+    } catch (error) {
+      console.error(
+        `[Server] AI discard action failed: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+      continue;
+    }
+
+    // 状態を保存
+    await saveGameState(roomId, gameState);
+
+    // ルーム全体に更新を配信
+    await broadcastGameState(roomId, gameState);
+
+    console.log(`[Server] AI ${player.name} discarded resources`);
+  }
+
+  // 破棄が完了したら次のターンを確認
+  setTimeout(() => {
+    executeAITurnIfNeeded(roomId);
+  }, 500);
+}
+
+/**
  * 切断ハンドラー
  */
 async function handleDisconnect(
@@ -1190,6 +1547,8 @@ io.on("connection", (socket) => {
   socket.on("game_action", (action) => handleGameAction(socket, action));
   socket.on("chat_message", (data) => handleChatMessage(socket, data));
   socket.on("reset_game", (data) => handleResetGame(socket, data));
+  socket.on("add_cpu_player", (data) => handleAddCpuPlayer(socket, data));
+  socket.on("remove_cpu_player", (data) => handleRemoveCpuPlayer(socket, data));
   socket.on("disconnect", () => handleDisconnect(socket));
 
   // エラーハンドリング

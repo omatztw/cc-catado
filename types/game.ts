@@ -175,6 +175,8 @@ export interface Player {
   };
   // 接続状態
   isConnected: boolean;
+  // AIプレイヤーかどうか
+  isAI?: boolean;
 }
 
 /**
@@ -326,6 +328,10 @@ export interface ClientToServerEvents {
   chat_message: (data: { roomId: string; message: string }) => void;
   // ゲームリセット（ホストのみ）
   reset_game: (data: { roomId: string }) => void;
+  // CPUプレイヤー追加（ホストのみ）
+  add_cpu_player: (data: { roomId: string }) => void;
+  // CPUプレイヤー削除（ホストのみ）
+  remove_cpu_player: (data: { roomId: string; playerId: string }) => void;
 }
 
 /**
@@ -401,6 +407,18 @@ export interface ServerToClientEvents {
   game_reset: (data: { gameState: GameState }) => void;
   // エラー通知
   error: (data: { message: string; code: string }) => void;
+  // CPUプレイヤー追加結果
+  cpu_player_added: (data: {
+    success: boolean;
+    player?: Player;
+    error?: string;
+  }) => void;
+  // CPUプレイヤー削除結果
+  cpu_player_removed: (data: {
+    success: boolean;
+    playerId?: string;
+    error?: string;
+  }) => void;
 }
 
 // ============================================
@@ -679,4 +697,51 @@ export interface TestScenario {
    * 順番に消費され、空になったら通常のランダム処理にフォールバック
    */
   stealIndices?: number[];
+}
+
+// ============================================
+// AI設定
+// ============================================
+
+/**
+ * AIプロバイダーの種類
+ */
+export type AIProvider = "gemini" | "deepseek" | "openrouter";
+
+/**
+ * AI設定
+ */
+export interface AIConfig {
+  provider: AIProvider;
+  apiKey: string;
+  // モデル名（オプション、デフォルトは各プロバイダーの推奨モデル）
+  model?: string;
+  // 思考時間（ミリ秒）- 人間らしさのための遅延
+  thinkingDelay?: number;
+}
+
+/**
+ * AIのアクション決定リクエスト
+ */
+export interface AIDecisionRequest {
+  gameState: GameState;
+  playerId: string;
+  availableActions: AvailableAction[];
+}
+
+/**
+ * 実行可能なアクション情報
+ */
+export interface AvailableAction {
+  type: GameActionType;
+  description: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * AIのアクション決定レスポンス
+ */
+export interface AIDecisionResponse {
+  action: GameAction;
+  reasoning?: string;
 }
