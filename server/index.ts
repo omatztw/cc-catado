@@ -1394,18 +1394,28 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
     );
 
     // AIのアクションを実行
-    const action = await executeAITurn(gameState, currentPlayer.id);
+    const result = await executeAITurn(gameState, currentPlayer.id);
 
-    if (!action) {
+    if (!result.action) {
       console.error(
         `[Server] AI ${currentPlayer.name} failed to decide action`
       );
       return;
     }
 
+    // つぶやきがあれば送信（チャットログには保存しない）
+    if (result.thinking) {
+      io.to(roomId).emit("ai_thinking", {
+        playerId: currentPlayer.id,
+        playerName: currentPlayer.name,
+        thinking: result.thinking,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // アクションを処理
     try {
-      gameState = processGameAction(gameState, action, currentPlayer.id);
+      gameState = processGameAction(gameState, result.action, currentPlayer.id);
     } catch (error) {
       console.error(
         `[Server] AI action failed: ${error instanceof Error ? error.message : "Unknown error"}`
@@ -1420,7 +1430,7 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
     await broadcastGameState(roomId, gameState);
 
     console.log(
-      `[Server] AI ${currentPlayer.name} executed: ${action.type}`
+      `[Server] AI ${currentPlayer.name} executed: ${result.action.type}`
     );
 
     // 次のAIターンがあれば再帰的に実行（少し遅延を入れる）
@@ -1454,18 +1464,28 @@ async function executeAIDiscardIfNeeded(
     );
 
     // AIのアクションを実行
-    const action = await executeAITurn(gameState, player.id);
+    const result = await executeAITurn(gameState, player.id);
 
-    if (!action) {
+    if (!result.action) {
       console.error(
         `[Server] AI ${player.name} failed to decide discard action`
       );
       continue;
     }
 
+    // つぶやきがあれば送信（チャットログには保存しない）
+    if (result.thinking) {
+      io.to(roomId).emit("ai_thinking", {
+        playerId: player.id,
+        playerName: player.name,
+        thinking: result.thinking,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // アクションを処理
     try {
-      gameState = processGameAction(gameState, action, player.id);
+      gameState = processGameAction(gameState, result.action, player.id);
     } catch (error) {
       console.error(
         `[Server] AI discard action failed: ${error instanceof Error ? error.message : "Unknown error"}`

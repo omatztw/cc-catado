@@ -47,12 +47,12 @@ export class AIClient {
     gameState: GameState,
     playerId: string,
     availableActions: AvailableAction[]
-  ): Promise<GameAction | null> {
+  ): Promise<{ action: GameAction | null; thinking: string | null }> {
     const prompt = this.buildPrompt(gameState, playerId, availableActions);
 
     try {
       const response = await this.callAPI(prompt);
-      const action = this.parseResponse(response, gameState.id, availableActions);
+      const result = this.parseResponse(response, gameState.id, availableActions);
 
       // 人間らしさのための遅延
       if (this.config.thinkingDelay && this.config.thinkingDelay > 0) {
@@ -61,10 +61,10 @@ export class AIClient {
         );
       }
 
-      return action;
+      return result;
     } catch (error) {
       console.error("[AIClient] Error deciding action:", error);
-      return null;
+      return { action: null, thinking: null };
     }
   }
 
@@ -115,13 +115,14 @@ ${actionsJson}
 ## 回答形式
 JSONで回答してください。以下の形式のみ使用可能です:
 
-{"action": {"type": "アクション名", ...必要なパラメータ}, "reasoning": "選択理由"}
+{"action": {"type": "アクション名", ...必要なパラメータ}, "reasoning": "選択理由", "thinking": "短いつぶやき"}
 
 重要:
 - 必ず上記の利用可能なアクションリストから選択してください
 - type以外に必要なパラメータは、上記リストのparamsを参照してください
 - roomIdは不要です（自動で追加されます）
 - reasoningは日本語で簡潔に記載してください
+- thinkingは人間っぽい短いつぶやき（最大30文字程度）を入れてください。例: 「よし、開拓地だ！」「うーん、資源が足りないな...」「これでどうだ！」「ここは我慢...」「次こそ都市を建てるぞ」
 `;
   }
 
@@ -329,13 +330,13 @@ JSONで回答してください。以下の形式のみ使用可能です:
   }
 
   /**
-   * APIレスポンスをパースしてGameActionを取得
+   * APIレスポンスをパースしてGameActionとthinkingを取得
    */
   private parseResponse(
     response: string,
     roomId: string,
     availableActions: AvailableAction[]
-  ): GameAction | null {
+  ): { action: GameAction | null; thinking: string | null } {
     try {
       // JSON部分を抽出（```json ... ``` や前後のテキストを除去）
       let jsonStr = response;
@@ -354,6 +355,7 @@ JSONで回答してください。以下の形式のみ使用可能です:
 
       const parsed = JSON.parse(jsonStr);
       const actionData = parsed.action || parsed;
+      const thinking = parsed.thinking || null;
 
       // roomIdを追加
       const action = {
@@ -368,18 +370,19 @@ JSONで回答してください。以下の形式のみ使用可能です:
           `[AIClient] Invalid action type: ${action.type}. Available: ${availableActions.map((a) => a.type).join(", ")}`
         );
         // フォールバック: 最初の利用可能なアクションを選択
-        return this.createFallbackAction(roomId, availableActions);
+        return { action: this.createFallbackAction(roomId, availableActions), thinking };
       }
 
       console.log(
         `[AIClient] AI decided: ${action.type}`,
-        parsed.reasoning || ""
+        parsed.reasoning || "",
+        `(thinking: ${thinking || "none"})`
       );
-      return action;
+      return { action, thinking };
     } catch (error) {
       console.error("[AIClient] Failed to parse AI response:", error);
       console.error("[AIClient] Response was:", response);
-      return this.createFallbackAction(roomId, availableActions);
+      return { action: this.createFallbackAction(roomId, availableActions), thinking: null };
     }
   }
 

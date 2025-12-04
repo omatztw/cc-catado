@@ -1944,6 +1944,7 @@ export function GameRoom() {
     isSpectator,
     error,
     chatMessages,
+    aiThinkings,
     publicRooms,
     savedSession,
     login,
@@ -1975,6 +1976,7 @@ export function GameRoom() {
   // チャット吹き出し状態（プレイヤーID → メッセージ）
   const [chatBubbles, setChatBubbles] = useState<Record<string, string>>({});
   const prevChatMessagesLengthRef = useRef<number>(0);
+  const prevAiThinkingsLengthRef = useRef<number>(0);
   const chatBubbleTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   // ゲームイベントに応じて効果音・通知を発動
@@ -2049,6 +2051,37 @@ export function GameRoom() {
     }
     prevChatMessagesLengthRef.current = chatMessages.length;
   }, [chatMessages]);
+
+  // AIのつぶやき（thinking）が追加されたら吹き出しを表示
+  useEffect(() => {
+    if (aiThinkings.length > prevAiThinkingsLengthRef.current) {
+      // 新しいつぶやきを取得
+      const newThinkings = aiThinkings.slice(prevAiThinkingsLengthRef.current);
+
+      newThinkings.forEach((thinking) => {
+        // 既存のタイマーをクリア
+        if (chatBubbleTimersRef.current[thinking.playerId]) {
+          clearTimeout(chatBubbleTimersRef.current[thinking.playerId]);
+        }
+
+        // 吹き出しを設定
+        setChatBubbles((prev) => ({
+          ...prev,
+          [thinking.playerId]: thinking.thinking,
+        }));
+
+        // 4秒後に吹き出しを消す（チャットより少し短め）
+        chatBubbleTimersRef.current[thinking.playerId] = setTimeout(() => {
+          setChatBubbles((prev) => {
+            const next = { ...prev };
+            delete next[thinking.playerId];
+            return next;
+          });
+        }, 4000);
+      });
+    }
+    prevAiThinkingsLengthRef.current = aiThinkings.length;
+  }, [aiThinkings]);
 
   // クリーンアップ: コンポーネントアンマウント時にタイマーをクリア
   useEffect(() => {

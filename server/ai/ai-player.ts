@@ -286,21 +286,22 @@ export function getAvailableActionsForAI(
 
 /**
  * AIプレイヤーのターンを実行
+ * @returns アクションとつぶやき（thinking）を返す
  */
 export async function executeAITurn(
   state: GameState,
   playerId: string
-): Promise<GameAction | null> {
+): Promise<{ action: GameAction | null; thinking: string | null }> {
   const aiClient = getAIClient();
   if (!aiClient) {
     console.error("[AIPlayer] AI client not available");
-    return null;
+    return { action: null, thinking: null };
   }
 
   const availableActions = getAvailableActionsForAI(state, playerId);
   if (availableActions.length === 0) {
     console.warn("[AIPlayer] No available actions for AI");
-    return null;
+    return { action: null, thinking: null };
   }
 
   console.log(
@@ -308,8 +309,8 @@ export async function executeAITurn(
     `Phase: ${state.phase}, Available actions: ${availableActions.length}`
   );
 
-  const action = await aiClient.decideAction(state, playerId, availableActions);
-  return action;
+  const result = await aiClient.decideAction(state, playerId, availableActions);
+  return result;
 }
 
 // ============================================
