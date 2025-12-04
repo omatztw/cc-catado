@@ -69,7 +69,6 @@ import {
   isAIPlayer,
   executeAITurn,
   isAIAvailable,
-  generateAIReaction,
 } from "./ai";
 
 // ============================================
@@ -870,29 +869,6 @@ async function handleGameAction(
     console.log(
       `[Server] Action ${action.type} processed for room ${roomId} by player ${playerId}`
     );
-
-    // AIプレイヤー（アクションを行った人以外）がリアクションする（確率30%）
-    if (Math.random() < 0.3) {
-      const aiPlayersToReact = gameState.players.filter(
-        (p) => isAIPlayer(p) && p.id !== playerId
-      );
-      if (aiPlayersToReact.length > 0) {
-        // ランダムに1人のAIを選択
-        const randomAI = aiPlayersToReact[Math.floor(Math.random() * aiPlayersToReact.length)];
-        const diceTotal = gameState.diceResult?.total;
-        const reaction = generateAIReaction(action.type, diceTotal, randomAI);
-
-        // 少し遅延を入れてリアクションを送信
-        setTimeout(() => {
-          io.to(roomId).emit("ai_thinking", {
-            playerId: randomAI.id,
-            playerName: randomAI.name,
-            thinking: reaction,
-            timestamp: new Date().toISOString(),
-          });
-        }, 500 + Math.random() * 1000);
-      }
-    }
 
     // 勝者チェック
     if (gameState.winnerId) {
