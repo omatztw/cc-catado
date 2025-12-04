@@ -705,10 +705,12 @@ function PlayerPanel({
   player,
   isCurrentTurn,
   isSelf,
+  chatBubble,
 }: {
   player: Player;
   isCurrentTurn: boolean;
   isSelf: boolean;
+  chatBubble?: string;
 }) {
   const borderColor = {
     red: "border-red-500",
@@ -756,6 +758,17 @@ function PlayerPanel({
           )}
         </span>
       </div>
+
+      {/* チャット吹き出し */}
+      {chatBubble && (
+        <div className="relative mb-2 animate-fade-in">
+          <div className="bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 shadow-md relative">
+            <div className="absolute -top-2 left-4 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[8px] border-b-gray-300"></div>
+            <div className="absolute -top-[6px] left-4 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[8px] border-b-white"></div>
+            {chatBubble}
+          </div>
+        </div>
+      )}
 
       {/* 特殊バッジ（最長交易路・最大騎士力） */}
       <div className="flex gap-1 mb-2">
@@ -1959,6 +1972,11 @@ export function GameRoom() {
   const prevGameStateRef = useRef<GameState | null>(null);
   const prevCurrentPlayerIdRef = useRef<string | null>(null);
 
+  // チャット吹き出し状態（プレイヤーID → メッセージ）
+  const [chatBubbles, setChatBubbles] = useState<Record<string, string>>({});
+  const prevChatMessagesLengthRef = useRef<number>(0);
+  const chatBubbleTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
+
   // ゲームイベントに応じて効果音・通知を発動
   useEffect(() => {
     if (!gameState || !playerId) return;
@@ -2000,6 +2018,46 @@ export function GameRoom() {
     prevGameStateRef.current = gameState;
     prevCurrentPlayerIdRef.current = gameState.currentPlayerId;
   }, [gameState, playerId, playSound, notifyTurn]);
+
+  // チャットメッセージが追加されたら吹き出しを表示
+  useEffect(() => {
+    if (chatMessages.length > prevChatMessagesLengthRef.current) {
+      // 新しいメッセージを取得
+      const newMessages = chatMessages.slice(prevChatMessagesLengthRef.current);
+
+      newMessages.forEach((msg) => {
+        // 既存のタイマーをクリア
+        if (chatBubbleTimersRef.current[msg.playerId]) {
+          clearTimeout(chatBubbleTimersRef.current[msg.playerId]);
+        }
+
+        // 吹き出しを設定
+        setChatBubbles((prev) => ({
+          ...prev,
+          [msg.playerId]: msg.message,
+        }));
+
+        // 5秒後に吹き出しを消す
+        chatBubbleTimersRef.current[msg.playerId] = setTimeout(() => {
+          setChatBubbles((prev) => {
+            const next = { ...prev };
+            delete next[msg.playerId];
+            return next;
+          });
+        }, 5000);
+      });
+    }
+    prevChatMessagesLengthRef.current = chatMessages.length;
+  }, [chatMessages]);
+
+  // クリーンアップ: コンポーネントアンマウント時にタイマーをクリア
+  useEffect(() => {
+    return () => {
+      Object.values(chatBubbleTimersRef.current).forEach((timer) => {
+        clearTimeout(timer);
+      });
+    };
+  }, []);
 
   // 選択可能な要素（観戦者は何も選択できない）
   const selectableIntersections = useMemo(() => {
@@ -2286,6 +2344,7 @@ export function GameRoom() {
                 player={player}
                 isCurrentTurn={player.id === gameState.currentPlayerId}
                 isSelf={player.id === playerId}
+                chatBubble={chatBubbles[player.id]}
               />
             ))}
           </div>
