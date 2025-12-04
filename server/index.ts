@@ -69,6 +69,7 @@ import {
   isAIPlayer,
   executeAITurn,
   isAIAvailable,
+  generateAIReaction,
 } from "./ai";
 
 // ============================================
@@ -870,6 +871,29 @@ async function handleGameAction(
       `[Server] Action ${action.type} processed for room ${roomId} by player ${playerId}`
     );
 
+    // AIプレイヤー（アクションを行った人以外）がリアクションする（確率30%）
+    if (Math.random() < 0.3) {
+      const aiPlayersToReact = gameState.players.filter(
+        (p) => isAIPlayer(p) && p.id !== playerId
+      );
+      if (aiPlayersToReact.length > 0) {
+        // ランダムに1人のAIを選択
+        const randomAI = aiPlayersToReact[Math.floor(Math.random() * aiPlayersToReact.length)];
+        const diceTotal = gameState.diceResult?.total;
+        const reaction = generateAIReaction(action.type, diceTotal, randomAI);
+
+        // 少し遅延を入れてリアクションを送信
+        setTimeout(() => {
+          io.to(roomId).emit("ai_thinking", {
+            playerId: randomAI.id,
+            playerName: randomAI.name,
+            thinking: reaction,
+            timestamp: new Date().toISOString(),
+          });
+        }, 500 + Math.random() * 1000);
+      }
+    }
+
     // 勝者チェック
     if (gameState.winnerId) {
       console.log(
@@ -1394,18 +1418,28 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
     );
 
     // AIのアクションを実行
-    const action = await executeAITurn(gameState, currentPlayer.id);
+    const result = await executeAITurn(gameState, currentPlayer.id);
 
-    if (!action) {
+    if (!result.action) {
       console.error(
         `[Server] AI ${currentPlayer.name} failed to decide action`
       );
       return;
     }
 
+    // つぶやきがあれば送信（チャットログには保存しない）
+    if (result.thinking) {
+      io.to(roomId).emit("ai_thinking", {
+        playerId: currentPlayer.id,
+        playerName: currentPlayer.name,
+        thinking: result.thinking,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // アクションを処理
     try {
-      gameState = processGameAction(gameState, action, currentPlayer.id);
+      gameState = processGameAction(gameState, result.action, currentPlayer.id);
     } catch (error) {
       console.error(
         `[Server] AI action failed: ${error instanceof Error ? error.message : "Unknown error"}`
@@ -1420,7 +1454,7 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
     await broadcastGameState(roomId, gameState);
 
     console.log(
-      `[Server] AI ${currentPlayer.name} executed: ${action.type}`
+      `[Server] AI ${currentPlayer.name} executed: ${result.action.type}`
     );
 
     // 次のAIターンがあれば再帰的に実行（少し遅延を入れる）
@@ -1454,18 +1488,28 @@ async function executeAIDiscardIfNeeded(
     );
 
     // AIのアクションを実行
-    const action = await executeAITurn(gameState, player.id);
+    const result = await executeAITurn(gameState, player.id);
 
-    if (!action) {
+    if (!result.action) {
       console.error(
         `[Server] AI ${player.name} failed to decide discard action`
       );
       continue;
     }
 
+    // つぶやきがあれば送信（チャットログには保存しない）
+    if (result.thinking) {
+      io.to(roomId).emit("ai_thinking", {
+        playerId: player.id,
+        playerName: player.name,
+        thinking: result.thinking,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // アクションを処理
     try {
-      gameState = processGameAction(gameState, action, player.id);
+      gameState = processGameAction(gameState, result.action, player.id);
     } catch (error) {
       console.error(
         `[Server] AI discard action failed: ${error instanceof Error ? error.message : "Unknown error"}`

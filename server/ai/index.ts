@@ -9,4 +9,5 @@ export {
   isAIPlayer,
   getAvailableActionsForAI,
   executeAITurn,
+  generateAIReaction,
 } from "./ai-player";

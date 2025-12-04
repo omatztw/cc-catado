@@ -419,6 +419,13 @@ export interface ServerToClientEvents {
     playerId?: string;
     error?: string;
   }) => void;
+  // AIの思考（つぶやき）表示
+  ai_thinking: (data: {
+    playerId: string;
+    playerName: string;
+    thinking: string;
+    timestamp: string;
+  }) => void;
 }
 
 // ============================================
