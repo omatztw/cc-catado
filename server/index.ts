@@ -46,6 +46,7 @@ import {
   updateRoomActivity,
   getInactiveRoomIds,
   deleteRoomCompletely,
+  getActiveRooms,
   saveUserInfo,
   getUsernameByPlayerId,
   setUserActiveRoom,
@@ -67,6 +68,8 @@ import {
   isPlayer as checkIsPlayer,
   processGameAction,
   resetGameState,
+  checkTradeTimeout,
+  handleCancelTrade,
 } from "./game-logic";
 
 import {
@@ -885,6 +888,17 @@ async function handleGameAction(
         `[Server] Game over! Winner: ${gameState.winnerId} in room ${roomId}`
       );
     } else {
+      // 交易提案があった場合、すぐにAIの応答をチェック
+      if (action.type === "propose_trade" && gameState.activeTradeOffer) {
+        setTimeout(async () => {
+          // 最新のゲーム状態を取得してから処理
+          const currentGameState = await getGameState(roomId);
+          if (currentGameState) {
+            await handleAITradeResponses(roomId, currentGameState);
+          }
+        }, 500);
+      }
+      
       // AIプレイヤーのターンを自動実行（遅延を入れて非同期で）
       setTimeout(() => {
         executeAITurnIfNeeded(roomId);
@@ -1374,12 +1388,45 @@ async function handleRemoveCpuPlayer(
  * ゲーム状態が変わった後に呼び出される
  */
 async function executeAITurnIfNeeded(roomId: string): Promise<void> {
+  // 既に実行中なら何もしない
+  if (aiTurnInProgress.has(roomId)) {
+    console.log(`[Server] AI turn already in progress for room ${roomId}, skipping`);
+    return;
+  }
+
   try {
+    aiTurnInProgress.add(roomId);
     let gameState = await getGameState(roomId);
-    if (!gameState) return;
+    if (!gameState) {
+      aiTurnInProgress.delete(roomId);
+      return;
+    }
+
+    // 交易タイムアウトをチェック
+    const updatedState = checkTradeTimeout(gameState);
+    if (updatedState !== gameState) {
+      console.log(`[Server] Trade offer timed out in room ${roomId}`);
+      gameState = updatedState;
+      await saveGameState(roomId, gameState);
+      
+      // 全プレイヤーに状態を送信
+      await broadcastGameState(roomId, gameState);
+    }
+
+    console.log(`[Server] AI turn check - Phase: ${gameState.phase}, Current player: ${gameState.currentPlayerId}`);
 
     // ゲームが終了している場合は何もしない
     if (gameState.phase === "game_over" || gameState.phase === "waiting") {
+      console.log(`[Server] Game over or waiting phase, no AI action needed`);
+      aiTurnInProgress.delete(roomId);
+      return;
+    }
+
+    // Discard フェーズは特別処理：現在のプレイヤーに関係なく、全AIプレイヤーの破棄をチェック
+    if (gameState.phase === "discard") {
+      console.log(`[Server] Discard phase: checking all AI players for discard needs`);
+      await executeAIDiscardIfNeeded(roomId, gameState);
+      aiTurnInProgress.delete(roomId);
       return;
     }
 
@@ -1389,12 +1436,20 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
       (p) => p.id === currentPlayerId
     );
 
+    console.log(`[Server] Current player: ${currentPlayer?.name || 'none'}, isAI: ${currentPlayer ? isAIPlayer(currentPlayer) : 'N/A'}`);
+
+    // 交易提案がある場合、AIプレイヤーに応答させる（自分のターンでなくても）
+    if (gameState.activeTradeOffer) {
+      console.log(`[Server] Active trade offer detected, calling handleAITradeResponses for room ${roomId}`);
+      console.log(`[Server] Trade offer from: ${gameState.activeTradeOffer.fromPlayerId}`);
+      console.log(`[Server] Trade responses:`, gameState.activeTradeOffer.responses);
+      await handleAITradeResponses(roomId, gameState);
+    }
+
     // AIプレイヤーでなければ何もしない
     if (!currentPlayer || !isAIPlayer(currentPlayer)) {
-      // discardフェーズの場合は、破棄が必要なAIプレイヤーをチェック
-      if (gameState.phase === "discard") {
-        await executeAIDiscardIfNeeded(roomId, gameState);
-      }
+      console.log(`[Server] Current player is not AI (player: ${currentPlayer?.name || 'none'}), phase is ${gameState.phase}, nothing to do`);
+      aiTurnInProgress.delete(roomId);
       return;
     }
 
@@ -1409,6 +1464,7 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
       console.error(
         `[Server] AI ${currentPlayer.name} failed to decide action`
       );
+      aiTurnInProgress.delete(roomId);
       return;
     }
 
@@ -1422,14 +1478,60 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
       });
     }
 
-    // アクションを処理
-    try {
-      gameState = processGameAction(gameState, result.action, currentPlayer.id);
-    } catch (error) {
-      console.error(
-        `[Server] AI action failed: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
-      return;
+    // アクションを処理（リトライは位置を要求する建設系アクションのみ）
+    let retryCount = 0;
+    const isLocationBasedAction = result.action.type.includes('build') || result.action.type === 'move_robber';
+    const maxRetries = isLocationBasedAction ? 1 : 0;
+    const failedCoordinates = new Set<string>();
+    
+    console.log(`[Server] Processing action ${result.action.type} with maxRetries: ${maxRetries}`);
+    
+    while (retryCount <= maxRetries) {
+      try {
+        gameState = processGameAction(gameState, result.action, currentPlayer.id);
+        break; // 成功したらループを抜ける
+      } catch (error) {
+        console.error(
+          `[Server] AI action failed (attempt ${retryCount + 1}/${maxRetries + 1}): ${error instanceof Error ? error.message : "Unknown error"}`
+        );
+        
+        // 失敗した座標を記録
+        if (result.action) {
+          if ('intersectionId' in result.action && result.action.intersectionId) {
+            failedCoordinates.add(result.action.intersectionId);
+            console.log(`[Server] Adding failed intersection ${result.action.intersectionId} to blocklist`);
+          }
+          if ('edgeId' in result.action && result.action.edgeId) {
+            failedCoordinates.add(result.action.edgeId);
+            console.log(`[Server] Adding failed edge ${result.action.edgeId} to blocklist`);
+          }
+        }
+        
+        if (retryCount === maxRetries) {
+          console.error(`[Server] All AI action attempts failed for ${currentPlayer.name}`);
+          aiTurnInProgress.delete(roomId);
+          return;
+        }
+        
+        // リトライ: 新しいアクションを取得（失敗した座標を除外）
+        console.log(`[Server] Retrying AI action for ${currentPlayer.name}...`);
+        console.log(`[Server] Blocked coordinates: ${Array.from(failedCoordinates).join(', ')}`);
+        const { executeAITurnWithBlocklist } = await import("./ai/ai-player");
+        const retryResult = await executeAITurnWithBlocklist(gameState, currentPlayer.id, failedCoordinates);
+        
+        if (!retryResult.action) {
+          console.error(`[Server] AI retry failed to decide action`);
+          aiTurnInProgress.delete(roomId);
+          return;
+        }
+        
+        result.action = retryResult.action;
+        result.thinking = retryResult.thinking || "リトライしています...";
+        retryCount++;
+        
+        // 短い待機
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
 
     // 状態を保存
@@ -1442,12 +1544,15 @@ async function executeAITurnIfNeeded(roomId: string): Promise<void> {
       `[Server] AI ${currentPlayer.name} executed: ${result.action.type}`
     );
 
-    // 次のAIターンがあれば再帰的に実行（少し遅延を入れる）
+    // 次のAIターンがあれば再帰的に実行（ただし安全な遅延を入れる）
     setTimeout(() => {
       executeAITurnIfNeeded(roomId);
-    }, 500);
+    }, 1000); // 遅延を1秒に増やして安定性を向上
   } catch (error) {
     console.error("[Server] Error in executeAITurnIfNeeded:", error);
+  } finally {
+    // AIの重複実行を防ぐフラグをクリア
+    aiTurnInProgress.delete(roomId);
   }
 }
 
@@ -1512,9 +1617,170 @@ async function executeAIDiscardIfNeeded(
   }
 
   // 破棄が完了したら次のターンを確認
+  console.log(`[Server] All AI discards completed, checking for next turn...`);
   setTimeout(() => {
     executeAITurnIfNeeded(roomId);
   }, 500);
+}
+
+/**
+ * AIプレイヤーの交易応答処理
+ */
+async function handleAITradeResponses(roomId: string, gameState: GameState): Promise<void> {
+  console.log(`[Server] handleAITradeResponses called for room ${roomId}`);
+  if (!gameState.activeTradeOffer) {
+    console.log(`[Server] No active trade offer in room ${roomId}`);
+    return;
+  }
+
+  const tradeOffer = gameState.activeTradeOffer;
+  console.log(`[Server] Processing trade offer: ${tradeOffer.id}`);
+  console.log(`[Server] Current responses:`, tradeOffer.responses);
+  
+  // まだ応答していないAIプレイヤーを見つける
+  for (const player of gameState.players) {
+    console.log(`[Server] Checking player ${player.name} (isAI: ${isAIPlayer(player)}, fromPlayer: ${player.id === tradeOffer.fromPlayerId}, hasResponse: ${!!tradeOffer.responses[player.id]})`);
+    
+    if (isAIPlayer(player) && 
+        player.id !== tradeOffer.fromPlayerId && 
+        !tradeOffer.responses[player.id]) {
+      
+      console.log(`[Server] AI ${player.name} responding to trade offer`);
+      
+      try {
+        // 交易応答を直接評価して実行
+        const shouldAccept = evaluateTradeOfferForServer(gameState, player.id, tradeOffer);
+        console.log(`[Server] AI ${player.name} trade evaluation: ${shouldAccept ? "ACCEPT" : "REJECT"}`);
+        
+        const tradeAction: GameAction = {
+          type: "respond_to_trade",
+          roomId: roomId,
+          tradeId: tradeOffer.id,
+          response: shouldAccept ? "accept" : "reject"
+        };
+        
+        // アクションを処理
+        gameState = processGameAction(gameState, tradeAction, player.id);
+        await saveGameState(roomId, gameState);
+        await broadcastGameState(roomId, gameState);
+        
+        console.log(`[Server] AI ${player.name} responded to trade: ${tradeAction.response}`);
+        
+        // 少し待機してから次のAIの処理へ
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        console.error(`[Server] AI trade response failed for ${player.name}:`, error);
+      }
+    }
+  }
+}
+
+/**
+ * サーバー側での交易評価関数（ai-player.tsのロジックと同じ）
+ */
+function evaluateTradeOfferForServer(
+  state: GameState,
+  playerId: string,
+  tradeOffer: { offering: Partial<Record<string, number>>; requesting: Partial<Record<string, number>> }
+): boolean {
+  const player = state.players.find(p => p.id === playerId);
+  if (!player) return false;
+
+  // 相手が要求する資源を持っているかチェック
+  for (const [resource, amount] of Object.entries(tradeOffer.requesting)) {
+    if (amount && (player.resources[resource as keyof typeof player.resources] || 0) < amount) {
+      return false; // 要求された資源が足りない場合は拒否
+    }
+  }
+
+  // 簡単な評価ロジック：
+  // - 自分が必要な資源を相手が提供してくれる場合は受け入れる可能性が高い
+  // - 自分が余っている資源を要求された場合は受け入れやすい
+
+  const resourcePriority = getResourcePriorityForServer(state, player);
+  
+  let tradeValue = 0;
+  
+  // 受け取る資源の価値を計算
+  for (const [resource, amount] of Object.entries(tradeOffer.offering)) {
+    if (amount) {
+      const priority = resourcePriority[resource as keyof typeof resourcePriority] || 1;
+      tradeValue += amount * priority;
+    }
+  }
+  
+  // 失う資源の価値を計算
+  for (const [resource, amount] of Object.entries(tradeOffer.requesting)) {
+    if (amount) {
+      const priority = resourcePriority[resource as keyof typeof resourcePriority] || 1;
+      const currentAmount = player.resources[resource as keyof typeof player.resources] || 0;
+      
+      // 資源が少ない場合は手放したくない
+      const scarcityMultiplier = currentAmount <= 2 ? 2 : 1;
+      tradeValue -= amount * priority * scarcityMultiplier;
+    }
+  }
+
+  // トレードの価値がプラスなら受け入れる（20%の確率で少し損でも受け入れる）
+  return tradeValue > 0 || Math.random() < 0.2;
+}
+
+/**
+ * サーバー側での資源優先度計算
+ */
+function getResourcePriorityForServer(state: GameState, player: any): Record<string, number> {
+  const priority: Record<string, number> = {
+    wood: 1,
+    brick: 1,
+    wheat: 1,
+    ore: 1,
+    sheep: 1
+  };
+
+  // 建設可能なもので優先度を調整
+  if (canBuildForServer(player, "settlement")) {
+    priority.wood += 1;
+    priority.brick += 1;
+    priority.wheat += 1;
+    priority.sheep += 1;
+  }
+
+  if (canBuildForServer(player, "city")) {
+    priority.ore += 2;
+    priority.wheat += 2;
+  }
+
+  if (canBuildForServer(player, "road")) {
+    priority.wood += 0.5;
+    priority.brick += 0.5;
+  }
+
+  // 発展カードが買える場合
+  if (player.resources.ore >= 1 && player.resources.wheat >= 1 && player.resources.sheep >= 1) {
+    priority.ore += 0.5;
+    priority.wheat += 0.5;
+    priority.sheep += 0.5;
+  }
+
+  return priority;
+}
+
+/**
+ * サーバー側での建設可能性チェック
+ */
+function canBuildForServer(player: any, buildingType: string): boolean {
+  const { resources } = player;
+  
+  switch (buildingType) {
+    case "settlement":
+      return resources.wood >= 1 && resources.brick >= 1 && resources.wheat >= 1 && resources.sheep >= 1;
+    case "city":
+      return resources.ore >= 3 && resources.wheat >= 2;
+    case "road":
+      return resources.wood >= 1 && resources.brick >= 1;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -1591,6 +1857,10 @@ io.on("connection", (socket) => {
 // ============================================
 
 let cleanupIntervalId: NodeJS.Timeout | null = null;
+let tradeTimeoutIntervalId: NodeJS.Timeout | null = null;
+
+// AIターン実行中のルームを追跡（重複実行を防ぐ）
+const aiTurnInProgress = new Set<string>();
 
 /**
  * 非アクティブなルームをクリーンアップ
@@ -1630,6 +1900,29 @@ async function cleanupInactiveRooms(): Promise<void> {
 }
 
 /**
+ * 全ルームの交易タイムアウトをチェック
+ */
+async function checkAllTradeTimeouts(): Promise<void> {
+  try {
+    const activeRoomIds = await getActiveRooms();
+    
+    for (const roomId of activeRoomIds) {
+      const gameState = await getGameState(roomId);
+      if (!gameState || !gameState.activeTradeOffer) continue;
+      
+      const updatedState = checkTradeTimeout(gameState);
+      if (updatedState !== gameState) {
+        console.log(`[Server] Trade timeout detected in room ${roomId}`);
+        await saveGameState(roomId, updatedState);
+        await broadcastGameState(roomId, updatedState);
+      }
+    }
+  } catch (error) {
+    console.error('[Server] Error checking trade timeouts:', error);
+  }
+}
+
+/**
  * 定期的なクリーンアップタイマーを開始
  */
 function startCleanupTimer(): void {
@@ -1657,6 +1950,30 @@ function stopCleanupTimer(): void {
   }
 }
 
+/**
+ * 交易タイムアウトタイマーを開始
+ */
+function startTradeTimeoutTimer(): void {
+  if (tradeTimeoutIntervalId) {
+    return;
+  }
+
+  // 5秒ごとにチェック
+  tradeTimeoutIntervalId = setInterval(checkAllTradeTimeouts, 5000);
+  console.log("[Server] Trade timeout checker started (interval: 5s)");
+}
+
+/**
+ * 交易タイムアウトタイマーを停止
+ */
+function stopTradeTimeoutTimer(): void {
+  if (tradeTimeoutIntervalId) {
+    clearInterval(tradeTimeoutIntervalId);
+    tradeTimeoutIntervalId = null;
+    console.log("[Server] Trade timeout checker stopped");
+  }
+}
+
 // ============================================
 // サーバー起動
 // ============================================
@@ -1674,6 +1991,9 @@ async function startServer(): Promise<void> {
 
     // 非アクティブルームのクリーンアップタイマーを開始
     startCleanupTimer();
+    
+    // 交易タイムアウトタイマーを開始
+    startTradeTimeoutTimer();
   } catch (error) {
     console.error("[Server] Failed to start server:", error);
     process.exit(1);
@@ -1686,6 +2006,9 @@ async function gracefulShutdown(): Promise<void> {
 
   // クリーンアップタイマーを停止
   stopCleanupTimer();
+  
+  // 交易タイムアウトタイマーを停止
+  stopTradeTimeoutTimer();
 
   // 新しい接続を拒否
   httpServer.close();

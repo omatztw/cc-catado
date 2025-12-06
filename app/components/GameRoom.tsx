@@ -2368,18 +2368,27 @@ export function GameRoom() {
       {/* メインコンテンツ */}
       <main className="max-w-7xl mx-auto p-4">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          {/* 左サイドバー: プレイヤーリスト */}
+          {/* 左サイドバー: プレイヤーリストとチャット */}
           <div className="lg:col-span-1 space-y-3">
-            <h2 className="font-semibold text-gray-700">プレイヤー</h2>
-            {gameState.players.map((player) => (
-              <PlayerPanel
-                key={player.id}
-                player={player}
-                isCurrentTurn={player.id === gameState.currentPlayerId}
-                isSelf={player.id === playerId}
-                chatBubble={chatBubbles[player.id]}
-              />
-            ))}
+            {/* プレイヤーリスト */}
+            <div className="space-y-3">
+              <h2 className="font-semibold text-gray-700">プレイヤー</h2>
+              {gameState.players.map((player) => (
+                <PlayerPanel
+                  key={player.id}
+                  player={player}
+                  isCurrentTurn={player.id === gameState.currentPlayerId}
+                  isSelf={player.id === playerId}
+                  chatBubble={chatBubbles[player.id]}
+                />
+              ))}
+            </div>
+
+            {/* チャットシステム */}
+            <ChatPanel
+              messages={chatMessages}
+              onSendMessage={sendChatMessage}
+            />
           </div>
 
           {/* 中央: ゲームボード */}
@@ -2421,10 +2430,6 @@ export function GameRoom() {
                 <GameLog logs={gameState.logs} maxHeight="250px" />
               </div>
             )}
-            <ChatPanel
-              messages={chatMessages}
-              onSendMessage={sendChatMessage}
-            />
           </div>
         </div>
       </main>

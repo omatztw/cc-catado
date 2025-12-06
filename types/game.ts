@@ -232,6 +232,8 @@ export interface TradeOffer {
   requesting: Partial<PlayerResources>;
   // 各プレイヤーの応答状態
   responses: Record<string, "pending" | "accepted" | "rejected">;
+  // 作成日時
+  createdAt: string;
 }
 
 /**
@@ -448,6 +450,7 @@ export type GameActionType =
   | "discard_resources" // 資源破棄
   | "propose_trade" // 交易提案
   | "respond_to_trade" // 交易応答
+  | "cancel_trade" // 交易キャンセル
   | "trade_with_bank" // 銀行交易
   | "end_turn"; // ターン終了
 
@@ -508,6 +511,10 @@ export type GameAction =
       roomId: string;
       tradeId: string;
       response: "accept" | "reject";
+    }
+  | {
+      type: "cancel_trade";
+      roomId: string;
     }
   | {
       type: "trade_with_bank";
@@ -612,6 +619,8 @@ export type GameLogType =
   | "move_robber" // 盗賊移動
   | "steal_resource" // 資源略奪
   | "discard_resources" // 資源破棄
+  | "trade_timeout" // 交易タイムアウト
+  | "cancel_trade" // 交易キャンセル
   | "trade_with_bank" // 銀行交易
   | "player_trade" // プレイヤー間交易
   | "longest_road" // 最長交易路獲得

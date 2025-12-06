@@ -25,11 +25,11 @@ import type {
   GameLogEntry,
   GameLogType,
   TestScenario,
-} from "@/types/game";
+} from "../types/game";
 import {
   INITIAL_RESOURCES,
   INITIAL_PIECES,
-} from "@/types/game";
+} from "../types/game";
 
 // ============================================
 // ログ生成ヘルパー関数
@@ -1568,12 +1568,17 @@ export function handleMoveRobber(
   const robberLog = createLogEntry("move_robber", player);
   let newState = addLog(state, robberLog);
 
-  return {
+  newState = {
     ...newState,
     hexes: updatedHexes,
     phase: nextPhase,
     updatedAt: new Date().toISOString(),
   };
+
+  // 勝利条件をチェック
+  newState = checkVictoryCondition(newState);
+
+  return newState;
 }
 
 /**
@@ -1673,12 +1678,17 @@ export function handleStealResource(
   });
   let newState = addLog(state, stealLog);
 
-  return {
+  newState = {
     ...newState,
     players: updatedPlayers,
     phase: "main",
     updatedAt: new Date().toISOString(),
   };
+
+  // 勝利条件をチェック
+  newState = checkVictoryCondition(newState);
+
+  return newState;
 }
 
 /**
@@ -2366,6 +2376,7 @@ export function handleProposeTrade(
     offering,
     requesting,
     responses: {},
+    createdAt: new Date().toISOString(),
   };
 
   // 他のプレイヤーの応答を pending に初期化
@@ -2514,6 +2525,35 @@ export function handleRespondToTrade(
 }
 
 /**
+ * 交易提案をキャンセル
+ */
+export function handleCancelTrade(
+  state: GameState,
+  playerId: string
+): GameState {
+  if (!state.activeTradeOffer) {
+    throw new Error("進行中の交易提案がありません");
+  }
+
+  if (state.activeTradeOffer.fromPlayerId !== playerId) {
+    throw new Error("自分の交易提案のみキャンセルできます");
+  }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  // 交易キャンセルログを追加
+  const cancelLog = createLogEntry("cancel_trade", player);
+  let newState = addLog(state, cancelLog);
+
+  return {
+    ...newState,
+    activeTradeOffer: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
  * 勝利条件をチェック
  */
 function checkVictoryCondition(state: GameState): GameState {
@@ -2538,6 +2578,35 @@ function checkVictoryCondition(state: GameState): GameState {
       };
     }
   }
+  return state;
+}
+
+/**
+ * 交易提案のタイムアウトをチェック（30秒）
+ */
+export function checkTradeTimeout(state: GameState): GameState {
+  if (!state.activeTradeOffer) {
+    return state;
+  }
+
+  const now = new Date();
+  const createdAt = new Date(state.activeTradeOffer.createdAt);
+  const timeoutMs = 30000; // 30秒
+
+  if (now.getTime() - createdAt.getTime() > timeoutMs) {
+    // タイムアウトログを追加
+    const proposer = state.players.find(p => p.id === state.activeTradeOffer!.fromPlayerId);
+    if (proposer) {
+      const timeoutLog = createLogEntry("trade_timeout", proposer);
+      let newState = addLog(state, timeoutLog);
+      return {
+        ...newState,
+        activeTradeOffer: null,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  }
+
   return state;
 }
 
@@ -2610,6 +2679,9 @@ export function processGameAction(
         action.tradeId,
         action.response
       );
+
+    case "cancel_trade":
+      return handleCancelTrade(state, playerId);
 
     default:
       throw new Error(`Unknown action type: ${(action as GameAction).type}`);
