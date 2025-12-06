@@ -12,6 +12,7 @@ import { useSound } from "../hooks/useSound";
 import { useNotification } from "../hooks/useNotification";
 import { useGameSettings } from "../hooks/useGameSettings";
 import { GameBoard } from "./GameBoard";
+import { GameLog } from "./GameLog";
 import type {
   GameState,
   GamePhase,
@@ -71,6 +72,8 @@ const PHASE_LABELS: Record<GamePhase, string> = {
   robber_steal: "資源を奪う",
   discard: "資源を破棄",
   trade_offer: "交易提案中",
+  road_building_1: "街道建設（1本目）",
+  road_building_2: "街道建設（2本目）",
   game_over: "ゲーム終了",
 };
 
@@ -702,10 +705,12 @@ function PlayerPanel({
   player,
   isCurrentTurn,
   isSelf,
+  chatBubble,
 }: {
   player: Player;
   isCurrentTurn: boolean;
   isSelf: boolean;
+  chatBubble?: string;
 }) {
   const borderColor = {
     red: "border-red-500",
@@ -738,6 +743,7 @@ function PlayerPanel({
     >
       <div className="flex items-center justify-between mb-2">
         <span className="font-semibold text-gray-800">
+          {player.isAI && <span title="CPUプレイヤー">🤖 </span>}
           {player.name}
           {isSelf && " (あなた)"}
         </span>
@@ -752,6 +758,17 @@ function PlayerPanel({
           )}
         </span>
       </div>
+
+      {/* チャット吹き出し */}
+      {chatBubble && (
+        <div className="relative mb-2 animate-fade-in">
+          <div className="bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 shadow-md relative">
+            <div className="absolute -top-2 left-4 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[8px] border-b-gray-300"></div>
+            <div className="absolute -top-[6px] left-4 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[8px] border-b-white"></div>
+            {chatBubble}
+          </div>
+        </div>
+      )}
 
       {/* 特殊バッジ（最長交易路・最大騎士力） */}
       <div className="flex gap-1 mb-2">
@@ -839,6 +856,8 @@ function ActionPanel({
   onResetGame,
   onTakeSeat,
   onLeaveSeat,
+  onAddCpuPlayer,
+  onRemoveCpuPlayer,
 }: {
   gameState: GameState;
   playerId: string;
@@ -847,6 +866,8 @@ function ActionPanel({
   onResetGame: () => void;
   onTakeSeat: () => void;
   onLeaveSeat: () => void;
+  onAddCpuPlayer?: () => void;
+  onRemoveCpuPlayer?: (cpuPlayerId: string) => void;
 }) {
   const isMyTurn = gameState.currentPlayerId === playerId;
   const phase = gameState.phase;
@@ -1101,6 +1122,34 @@ function ActionPanel({
           )
         )}
 
+        {/* CPU追加ボタン（ホストのみ） */}
+        {isHost && !isSpectator && gameState.players.length < 4 && onAddCpuPlayer && (
+          <button
+            onClick={onAddCpuPlayer}
+            className="w-full py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition"
+          >
+            + CPUプレイヤーを追加
+          </button>
+        )}
+
+        {/* CPUプレイヤー一覧と削除ボタン（ホストのみ） */}
+        {isHost && !isSpectator && gameState.players.filter(p => p.isAI).length > 0 && onRemoveCpuPlayer && (
+          <div className="bg-purple-50 p-2 rounded-lg space-y-1">
+            <p className="text-xs text-purple-700 font-medium">CPUプレイヤー:</p>
+            {gameState.players.filter(p => p.isAI).map(cpu => (
+              <div key={cpu.id} className="flex items-center justify-between">
+                <span className="text-sm text-purple-800">{cpu.name}</span>
+                <button
+                  onClick={() => onRemoveCpuPlayer(cpu.id)}
+                  className="px-2 py-0.5 text-xs bg-red-500 text-white rounded hover:bg-red-600 transition"
+                >
+                  削除
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* ゲーム開始ボタン（プレイヤーのみ） */}
         {!isSpectator && canStartGame && (
           <button
@@ -1113,7 +1162,7 @@ function ActionPanel({
 
         {!isSpectator && gameState.players.length < 3 && (
           <p className="text-xs text-gray-500">
-            ゲームを開始するには3人以上必要です
+            ゲームを開始するには3人以上必要です（CPUも追加可能）
           </p>
         )}
 
@@ -1586,6 +1635,15 @@ function ActionPanel({
             </p>
           )}
 
+        {/* 街道建設カードフェーズ */}
+        {(phase === "road_building_1" || phase === "road_building_2") &&
+          isMyTurn && (
+            <p className="text-sm text-gray-600">
+              街道建設カード: {phase === "road_building_1" ? "1本目" : "2本目"}
+              の道を配置する場所をクリックしてください（資源消費なし）
+            </p>
+          )}
+
         {/* 盗賊移動フェーズ */}
         {phase === "robber_move" && isMyTurn && (
           <p className="text-sm text-gray-600">
@@ -1886,6 +1944,7 @@ export function GameRoom() {
     isSpectator,
     error,
     chatMessages,
+    aiThinkings,
     publicRooms,
     savedSession,
     login,
@@ -1901,6 +1960,8 @@ export function GameRoom() {
     sendChatMessage,
     resetGame,
     clearSavedSession,
+    addCpuPlayer,
+    removeCpuPlayer,
   } = useGameSocket();
 
   // ゲーム設定（効果音・通知）
@@ -1911,6 +1972,12 @@ export function GameRoom() {
   // 前回のゲーム状態を追跡（変更検知用）
   const prevGameStateRef = useRef<GameState | null>(null);
   const prevCurrentPlayerIdRef = useRef<string | null>(null);
+
+  // チャット吹き出し状態（プレイヤーID → メッセージ）
+  const [chatBubbles, setChatBubbles] = useState<Record<string, string>>({});
+  const prevChatMessagesLengthRef = useRef<number>(0);
+  const prevAiThinkingsLengthRef = useRef<number>(0);
+  const chatBubbleTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   // ゲームイベントに応じて効果音・通知を発動
   useEffect(() => {
@@ -1953,6 +2020,77 @@ export function GameRoom() {
     prevGameStateRef.current = gameState;
     prevCurrentPlayerIdRef.current = gameState.currentPlayerId;
   }, [gameState, playerId, playSound, notifyTurn]);
+
+  // チャットメッセージが追加されたら吹き出しを表示
+  useEffect(() => {
+    if (chatMessages.length > prevChatMessagesLengthRef.current) {
+      // 新しいメッセージを取得
+      const newMessages = chatMessages.slice(prevChatMessagesLengthRef.current);
+
+      newMessages.forEach((msg) => {
+        // 既存のタイマーをクリア
+        if (chatBubbleTimersRef.current[msg.playerId]) {
+          clearTimeout(chatBubbleTimersRef.current[msg.playerId]);
+        }
+
+        // 吹き出しを設定
+        setChatBubbles((prev) => ({
+          ...prev,
+          [msg.playerId]: msg.message,
+        }));
+
+        // 5秒後に吹き出しを消す
+        chatBubbleTimersRef.current[msg.playerId] = setTimeout(() => {
+          setChatBubbles((prev) => {
+            const next = { ...prev };
+            delete next[msg.playerId];
+            return next;
+          });
+        }, 5000);
+      });
+    }
+    prevChatMessagesLengthRef.current = chatMessages.length;
+  }, [chatMessages]);
+
+  // AIのつぶやき（thinking）が追加されたら吹き出しを表示
+  useEffect(() => {
+    if (aiThinkings.length > prevAiThinkingsLengthRef.current) {
+      // 新しいつぶやきを取得
+      const newThinkings = aiThinkings.slice(prevAiThinkingsLengthRef.current);
+
+      newThinkings.forEach((thinking) => {
+        // 既存のタイマーをクリア
+        if (chatBubbleTimersRef.current[thinking.playerId]) {
+          clearTimeout(chatBubbleTimersRef.current[thinking.playerId]);
+        }
+
+        // 吹き出しを設定
+        setChatBubbles((prev) => ({
+          ...prev,
+          [thinking.playerId]: thinking.thinking,
+        }));
+
+        // 4秒後に吹き出しを消す（チャットより少し短め）
+        chatBubbleTimersRef.current[thinking.playerId] = setTimeout(() => {
+          setChatBubbles((prev) => {
+            const next = { ...prev };
+            delete next[thinking.playerId];
+            return next;
+          });
+        }, 4000);
+      });
+    }
+    prevAiThinkingsLengthRef.current = aiThinkings.length;
+  }, [aiThinkings]);
+
+  // クリーンアップ: コンポーネントアンマウント時にタイマーをクリア
+  useEffect(() => {
+    return () => {
+      Object.values(chatBubbleTimersRef.current).forEach((timer) => {
+        clearTimeout(timer);
+      });
+    };
+  }, []);
 
   // 選択可能な要素（観戦者は何も選択できない）
   const selectableIntersections = useMemo(() => {
@@ -2003,8 +2141,13 @@ export function GameRoom() {
       return gameState.edges.filter((e) => !e.road).map((e) => e.id);
     }
 
-    // メインフェーズ: 空き辺
-    if (isMyTurn && phase === "main") {
+    // メインフェーズと街道建設フェーズ: 空き辺
+    if (
+      isMyTurn &&
+      (phase === "main" ||
+        phase === "road_building_1" ||
+        phase === "road_building_2")
+    ) {
       return gameState.edges.filter((e) => !e.road).map((e) => e.id);
     }
 
@@ -2067,7 +2210,9 @@ export function GameRoom() {
       if (
         phase === "setup_road_1" ||
         phase === "setup_road_2" ||
-        phase === "main"
+        phase === "main" ||
+        phase === "road_building_1" ||
+        phase === "road_building_2"
       ) {
         playSound("build");
         sendAction({ type: "build_road", edgeId } as Omit<GameAction, "roomId">);
@@ -2232,6 +2377,7 @@ export function GameRoom() {
                 player={player}
                 isCurrentTurn={player.id === gameState.currentPlayerId}
                 isSelf={player.id === playerId}
+                chatBubble={chatBubbles[player.id]}
               />
             ))}
           </div>
@@ -2262,7 +2408,18 @@ export function GameRoom() {
                 onResetGame={resetGame}
                 onTakeSeat={takeSeat}
                 onLeaveSeat={leaveSeat}
+                onAddCpuPlayer={addCpuPlayer}
+                onRemoveCpuPlayer={removeCpuPlayer}
               />
+            )}
+            {/* ゲームログ */}
+            {gameState.logs && gameState.logs.length > 0 && (
+              <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+                <div className="px-4 py-2 border-b border-gray-700">
+                  <h3 className="font-semibold text-white">ゲームログ</h3>
+                </div>
+                <GameLog logs={gameState.logs} maxHeight="250px" />
+              </div>
             )}
             <ChatPanel
               messages={chatMessages}

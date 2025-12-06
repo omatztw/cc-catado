@@ -22,11 +22,67 @@ import type {
   PlayerResources,
   DevelopmentCardType,
   TradeOffer,
+  GameLogEntry,
+  GameLogType,
+  TestScenario,
 } from "@/types/game";
 import {
   INITIAL_RESOURCES,
   INITIAL_PIECES,
 } from "@/types/game";
+
+// ============================================
+// ログ生成ヘルパー関数
+// ============================================
+
+/**
+ * ログエントリを生成
+ */
+function createLogEntry(
+  type: GameLogType,
+  player: Player,
+  data?: GameLogEntry["data"]
+): GameLogEntry {
+  return {
+    id: `log_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    type,
+    playerId: player.id,
+    playerName: player.name,
+    playerColor: player.color,
+    timestamp: new Date().toISOString(),
+    data,
+  };
+}
+
+/**
+ * ログを追加
+ */
+function addLog(state: GameState, log: GameLogEntry): GameState {
+  return {
+    ...state,
+    logs: [...(state.logs || []), log],
+  };
+}
+
+/**
+ * テストシナリオを深いコピーする
+ * diceRollsなどの配列がミュータブルに操作されるため、
+ * 各ゲームで独立したコピーを持つ必要がある
+ */
+function deepCloneScenario(scenario?: TestScenario): TestScenario | undefined {
+  if (!scenario) return undefined;
+  return {
+    ...scenario,
+    diceRolls: scenario.diceRolls ? [...scenario.diceRolls.map(r => ({ ...r }))] : undefined,
+    developmentCardOrder: scenario.developmentCardOrder ? [...scenario.developmentCardOrder] : undefined,
+    boardSetup: scenario.boardSetup ? {
+      terrains: [...scenario.boardSetup.terrains],
+      numberTokens: [...scenario.boardSetup.numberTokens],
+    } : undefined,
+    turnOrder: scenario.turnOrder ? [...scenario.turnOrder] : undefined,
+    stealIndices: scenario.stealIndices ? [...scenario.stealIndices] : undefined,
+  };
+}
 
 // ============================================
 // 定数
@@ -307,8 +363,16 @@ function parseEdgeId(id: string): EdgeCoordinate | null {
 
 /**
  * サイコロを振る
+ * @param scenario テストシナリオ（オプション）。指定されていればキューから値を取得
  */
-export function rollDice(): DiceResult {
+export function rollDice(scenario?: TestScenario): DiceResult {
+  // シナリオにダイスロールが定義されていればキューから取得
+  if (scenario?.diceRolls && scenario.diceRolls.length > 0) {
+    const roll = scenario.diceRolls.shift()!;
+    return { die1: roll.die1, die2: roll.die2, total: roll.die1 + roll.die2 };
+  }
+
+  // 通常のランダム処理
   const die1 = Math.floor(Math.random() * 6) + 1;
   const die2 = Math.floor(Math.random() * 6) + 1;
   return { die1, die2, total: die1 + die2 };
@@ -320,10 +384,16 @@ export function rollDice(): DiceResult {
 
 /**
  * 六角形タイルを生成
+ * @param scenario テストシナリオ（オプション）。boardSetupが定義されていれば固定配置を使用
  */
-function generateHexes(): Hex[] {
-  const terrains = shuffle(STANDARD_TERRAIN);
-  const numberTokens = [...STANDARD_NUMBER_TOKENS];
+function generateHexes(scenario?: TestScenario): Hex[] {
+  // シナリオにボード設定が定義されていればそれを使用
+  const terrains = scenario?.boardSetup?.terrains
+    ? [...scenario.boardSetup.terrains]
+    : shuffle(STANDARD_TERRAIN);
+  const numberTokens = scenario?.boardSetup?.numberTokens
+    ? [...scenario.boardSetup.numberTokens]
+    : [...STANDARD_NUMBER_TOKENS];
 
   const hexes: Hex[] = [];
   let tokenIndex = 0;
@@ -333,11 +403,18 @@ function generateHexes(): Hex[] {
     const terrain = terrains[i];
     const isDesert = terrain === "desert";
 
+    // シナリオの場合は numberTokens 配列から直接取得（砂漠はnull）
+    const token = scenario?.boardSetup?.numberTokens
+      ? numberTokens[i]
+      : isDesert
+        ? null
+        : numberTokens[tokenIndex++];
+
     hexes.push({
       id: cubeToId(coord),
       coordinate: coord,
       resourceType: terrain,
-      numberToken: isDesert ? null : numberTokens[tokenIndex++],
+      numberToken: token,
       hasRobber: isDesert, // 砂漠に盗賊を初期配置
     });
   }
@@ -450,12 +527,23 @@ function generateEdges(hexes: Hex[]): Edge[] {
 
 /**
  * 新しいゲーム状態を作成
+ * @param roomId ルームID
+ * @param hostId ホストのプレイヤーID
+ * @param scenario テストシナリオ（オプション）
  */
-export function createInitialGameState(roomId: string, hostId: string): GameState {
-  const hexes = generateHexes();
+export function createInitialGameState(
+  roomId: string,
+  hostId: string,
+  scenario?: TestScenario
+): GameState {
+  const hexes = generateHexes(scenario);
   const intersections = generateIntersections(hexes);
   const edges = generateEdges(hexes);
-  const developmentCardDeck = shuffle([...DEVELOPMENT_CARD_DECK]);
+
+  // シナリオに発展カード順序が定義されていればそれを使用
+  const developmentCardDeck = scenario?.developmentCardOrder
+    ? [...scenario.developmentCardOrder]
+    : shuffle([...DEVELOPMENT_CARD_DECK]);
 
   return {
     id: roomId,
@@ -477,19 +565,27 @@ export function createInitialGameState(roomId: string, hostId: string): GameStat
     longestRoadPlayerId: null,
     largestArmyPlayerId: null,
     winnerId: null,
+    logs: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    testScenario: deepCloneScenario(scenario),
   };
 }
 
 /**
  * ゲーム状態をリセットする（hostIdと既存プレイヤーを維持）
+ * @param state 現在のゲーム状態
+ * @param scenario テストシナリオ（オプション）
  */
-export function resetGameState(state: GameState): GameState {
-  const hexes = generateHexes();
+export function resetGameState(state: GameState, scenario?: TestScenario): GameState {
+  const hexes = generateHexes(scenario);
   const intersections = generateIntersections(hexes);
   const edges = generateEdges(hexes);
-  const developmentCardDeck = shuffle([...DEVELOPMENT_CARD_DECK]);
+
+  // シナリオに発展カード順序が定義されていればそれを使用
+  const developmentCardDeck = scenario?.developmentCardOrder
+    ? [...scenario.developmentCardOrder]
+    : shuffle([...DEVELOPMENT_CARD_DECK]);
 
   // プレイヤーの状態をリセット
   const resetPlayers = state.players.map((player) => ({
@@ -527,8 +623,10 @@ export function resetGameState(state: GameState): GameState {
     longestRoadPlayerId: null,
     largestArmyPlayerId: null,
     winnerId: null,
+    logs: [],
     createdAt: state.createdAt,
     updatedAt: new Date().toISOString(),
+    testScenario: deepCloneScenario(scenario),
   };
 }
 
@@ -873,13 +971,21 @@ export function startGame(state: GameState): GameState {
     throw new Error("Game has already started");
   }
 
-  // ターン順をランダム化
-  const turnOrder = shuffle(state.players.map((p) => p.id));
+  // シナリオにターン順が定義されていればそれを使用、なければランダム化
+  const turnOrder = state.testScenario?.turnOrder
+    ? [...state.testScenario.turnOrder]
+    : shuffle(state.players.map((p) => p.id));
 
   // プレイヤー配列もターン順に並び替え（UI表示用）
   const sortedPlayers = turnOrder.map(
     (id) => state.players.find((p) => p.id === id)!
   );
+
+  // 最初のプレイヤーを取得
+  const firstPlayer = sortedPlayers[0];
+
+  // ゲーム開始ログを追加
+  const gameStartLog = createLogEntry("game_start", firstPlayer);
 
   return {
     ...state,
@@ -888,6 +994,7 @@ export function startGame(state: GameState): GameState {
     currentPlayerId: turnOrder[0],
     turnOrder,
     turnNumber: 1,
+    logs: [gameStartLog],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -907,7 +1014,18 @@ export function handleRollDice(
     throw new Error("Not your turn");
   }
 
-  const diceResult = rollDice();
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
+
+  const diceResult = rollDice(state.testScenario);
+
+  // サイコロログを追加
+  const diceLog = createLogEntry("dice_roll", player, {
+    die1: diceResult.die1,
+    die2: diceResult.die2,
+    total: diceResult.total,
+  });
+  let newState = addLog(state, diceLog);
 
   // 7が出た場合
   if (diceResult.total === 7) {
@@ -921,7 +1039,7 @@ export function handleRollDice(
     });
 
     return {
-      ...state,
+      ...newState,
       diceResult,
       phase: playersToDiscard.length > 0 ? "discard" : "robber_move",
       updatedAt: new Date().toISOString(),
@@ -929,10 +1047,16 @@ export function handleRollDice(
   }
 
   // 資源を配布
-  const updatedPlayers = distributeResources(state, diceResult.total);
+  const { players: updatedPlayers, resourceGains } = distributeResourcesWithLog(state, diceResult.total);
+
+  // 資源獲得ログを追加
+  for (const { player: gainPlayer, resources } of resourceGains) {
+    const resourceLog = createLogEntry("resource_gain", gainPlayer, { resources });
+    newState = addLog(newState, resourceLog);
+  }
 
   return {
-    ...state,
+    ...newState,
     diceResult,
     phase: "main",
     players: updatedPlayers,
@@ -941,10 +1065,17 @@ export function handleRollDice(
 }
 
 /**
- * 資源を配布
+ * 資源を配布（ログ用の情報も返す）
  */
-function distributeResources(state: GameState, diceTotal: number): Player[] {
+function distributeResourcesWithLog(
+  state: GameState,
+  diceTotal: number
+): {
+  players: Player[];
+  resourceGains: { player: Player; resources: Partial<PlayerResources> }[];
+} {
   const players = [...state.players];
+  const resourceGainsMap = new Map<string, Partial<PlayerResources>>();
 
   // 該当する数字のタイルを取得
   const matchingHexes = state.hexes.filter(
@@ -976,12 +1107,27 @@ function distributeResources(state: GameState, diceTotal: number): Player[] {
               [resource]: players[playerIndex].resources[resource] + amount,
             },
           };
+
+          // ログ用に獲得資源を記録
+          const playerId = intersection.building.playerId;
+          const existingGains = resourceGainsMap.get(playerId) || {};
+          existingGains[resource] = (existingGains[resource] || 0) + amount;
+          resourceGainsMap.set(playerId, existingGains);
         }
       }
     }
   }
 
-  return players;
+  // resourceGainsMapをログ用の配列に変換
+  const resourceGains: { player: Player; resources: Partial<PlayerResources> }[] = [];
+  for (const [playerId, resources] of resourceGainsMap) {
+    const player = players.find((p) => p.id === playerId);
+    if (player && Object.keys(resources).length > 0) {
+      resourceGains.push({ player, resources });
+    }
+  }
+
+  return { players, resourceGains };
 }
 
 /**
@@ -1124,6 +1270,10 @@ export function handleBuildSettlement(
     updatedAt: new Date().toISOString(),
   };
 
+  // 開拓地建設ログを追加
+  const buildLog = createLogEntry("build_settlement", player);
+  newState = addLog(newState, buildLog);
+
   // 勝利条件をチェック
   newState = checkVictoryCondition(newState);
 
@@ -1150,6 +1300,8 @@ export function handleBuildRoad(
 
   const isSetupPhase =
     state.phase === "setup_road_1" || state.phase === "setup_road_2";
+  const isRoadBuildingPhase =
+    state.phase === "road_building_1" || state.phase === "road_building_2";
 
   // 辺の座標を解析
   const edgeCoord = parseEdgeId(edgeId);
@@ -1201,16 +1353,18 @@ export function handleBuildRoad(
       throw new Error("道は直前に配置した開拓地に隣接している必要があります");
     }
   } else {
-    if (state.phase !== "main") {
+    if (state.phase !== "main" && !isRoadBuildingPhase) {
       throw new Error("Cannot build in current phase");
     }
 
-    // コスト確認（wood:1, brick:1）
-    if (player.resources.wood < 1 || player.resources.brick < 1) {
-      throw new Error("Not enough resources");
+    // コスト確認（wood:1, brick:1）- 街道建設カードフェーズでは不要
+    if (!isRoadBuildingPhase) {
+      if (player.resources.wood < 1 || player.resources.brick < 1) {
+        throw new Error("Not enough resources");
+      }
     }
 
-    // メインフェーズでは自分の道または建物に隣接している必要がある
+    // メインフェーズと街道建設フェーズでは自分の道または建物に隣接している必要がある
     const hasConnection = adjacentVertexIds.some((vertexId) => {
       // 建物に隣接しているか
       const intersection = state.intersections.find((i) => i.id === vertexId);
@@ -1249,7 +1403,8 @@ export function handleBuildRoad(
     if (p.id !== playerId) return p;
 
     let updatedResources = { ...p.resources };
-    if (!isSetupPhase) {
+    // 初期配置フェーズと街道建設カードフェーズでは資源を消費しない
+    if (!isSetupPhase && !isRoadBuildingPhase) {
       updatedResources = {
         ...updatedResources,
         wood: updatedResources.wood - 1,
@@ -1290,6 +1445,12 @@ export function handleBuildRoad(
       nextPhase = "setup_settlement_2";
       nextPlayerId = state.turnOrder[currentIndex - 1];
     }
+  } else if (state.phase === "road_building_1") {
+    // 街道建設カード: 1本目の道を建設したら2本目へ
+    nextPhase = "road_building_2";
+  } else if (state.phase === "road_building_2") {
+    // 街道建設カード: 2本目の道を建設したらメインフェーズへ戻る
+    nextPhase = "main";
   }
 
   let newState: GameState = {
@@ -1300,6 +1461,10 @@ export function handleBuildRoad(
     currentPlayerId: nextPlayerId,
     updatedAt: new Date().toISOString(),
   };
+
+  // 道路建設ログを追加
+  const buildLog = createLogEntry("build_road", player);
+  newState = addLog(newState, buildLog);
 
   // 最長交易路を更新（初期配置フェーズ後も含む）
   newState = updateLongestRoad(newState);
@@ -1330,7 +1495,9 @@ export function handleEndTurn(
   const nextIndex = (currentIndex + 1) % state.turnOrder.length;
   const nextPlayerId = state.turnOrder[nextIndex];
 
-  return {
+  // 次のプレイヤーを取得してターン開始ログを追加
+  const nextPlayer = state.players.find((p) => p.id === nextPlayerId);
+  let newState: GameState = {
     ...state,
     phase: "roll_dice",
     currentPlayerId: nextPlayerId,
@@ -1340,6 +1507,13 @@ export function handleEndTurn(
     cardsBoughtThisTurn: [], // ターン終了時にリセット
     updatedAt: new Date().toISOString(),
   };
+
+  if (nextPlayer) {
+    const turnLog = createLogEntry("turn_start", nextPlayer);
+    newState = addLog(newState, turnLog);
+  }
+
+  return newState;
 }
 
 /**
@@ -1357,6 +1531,9 @@ export function handleMoveRobber(
   if (state.currentPlayerId !== playerId) {
     throw new Error("Not your turn");
   }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
 
   const targetHex = state.hexes.find((h) => h.id === hexId);
   if (!targetHex) throw new Error("Hex not found");
@@ -1387,8 +1564,12 @@ export function handleMoveRobber(
   // 略奪対象がいなければメインフェーズへ
   const nextPhase = adjacentPlayerIds.size > 0 ? "robber_steal" : "main";
 
+  // 盗賊移動ログを追加
+  const robberLog = createLogEntry("move_robber", player);
+  let newState = addLog(state, robberLog);
+
   return {
-    ...state,
+    ...newState,
     hexes: updatedHexes,
     phase: nextPhase,
     updatedAt: new Date().toISOString(),
@@ -1414,6 +1595,9 @@ export function handleStealResource(
   if (targetPlayerId === playerId) {
     throw new Error("Cannot steal from yourself");
   }
+
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error("Player not found");
 
   const targetPlayer = state.players.find((p) => p.id === targetPlayerId);
   if (!targetPlayer) throw new Error("Target player not found");
@@ -1443,10 +1627,21 @@ export function handleStealResource(
   });
 
   let updatedPlayers = state.players;
+  let stolenResource: HoldableResource | undefined;
 
   if (availableResources.length > 0) {
-    const stolenResource =
-      availableResources[Math.floor(Math.random() * availableResources.length)];
+    // シナリオにstealIndicesが定義されていればキューから取得、なければランダム
+    let stealIndex: number;
+    if (state.testScenario?.stealIndices && state.testScenario.stealIndices.length > 0) {
+      stealIndex = state.testScenario.stealIndices.shift()!;
+      // インデックスが範囲外の場合は0に補正
+      if (stealIndex >= availableResources.length) {
+        stealIndex = 0;
+      }
+    } else {
+      stealIndex = Math.floor(Math.random() * availableResources.length);
+    }
+    stolenResource = availableResources[stealIndex];
 
     updatedPlayers = state.players.map((p) => {
       if (p.id === playerId) {
@@ -1454,7 +1649,7 @@ export function handleStealResource(
           ...p,
           resources: {
             ...p.resources,
-            [stolenResource]: p.resources[stolenResource] + 1,
+            [stolenResource!]: p.resources[stolenResource!] + 1,
           },
         };
       }
@@ -1463,7 +1658,7 @@ export function handleStealResource(
           ...p,
           resources: {
             ...p.resources,
-            [stolenResource]: p.resources[stolenResource] - 1,
+            [stolenResource!]: p.resources[stolenResource!] - 1,
           },
         };
       }
@@ -1471,8 +1666,15 @@ export function handleStealResource(
     });
   }
 
+  // 略奪ログを追加（奪った資源は秘密なので記録しない）
+  const stealLog = createLogEntry("steal_resource", player, {
+    targetPlayerId,
+    targetPlayerName: targetPlayer.name,
+  });
+  let newState = addLog(state, stealLog);
+
   return {
-    ...state,
+    ...newState,
     players: updatedPlayers,
     phase: "main",
     updatedAt: new Date().toISOString(),
@@ -1554,6 +1756,10 @@ export function handleBuildCity(
     updatedAt: new Date().toISOString(),
   };
 
+  // 都市建設ログを追加
+  const buildLog = createLogEntry("build_city", player);
+  newState = addLog(newState, buildLog);
+
   // 勝利条件をチェック
   newState = checkVictoryCondition(newState);
 
@@ -1624,8 +1830,12 @@ export function handleDiscardResources(
     return total > 7;
   });
 
+  // 資源破棄ログを追加
+  const discardLog = createLogEntry("discard_resources", player, { resources });
+  let newState = addLog(state, discardLog);
+
   return {
-    ...state,
+    ...newState,
     players: updatedPlayers,
     phase: stillNeedToDiscard ? "discard" : "robber_move",
     updatedAt: new Date().toISOString(),
@@ -1678,8 +1888,12 @@ export function handleTradeWithBank(
     };
   });
 
+  // 銀行交易ログを追加
+  const tradeLog = createLogEntry("trade_with_bank", player, { give, receive });
+  let newState = addLog(state, tradeLog);
+
   return {
-    ...state,
+    ...newState,
     players: updatedPlayers,
     updatedAt: new Date().toISOString(),
   };
@@ -1746,6 +1960,10 @@ export function handleBuyDevelopmentCard(
     cardsBoughtThisTurn: [...state.cardsBoughtThisTurn, cardId],
     updatedAt: new Date().toISOString(),
   };
+
+  // 発展カード購入ログを追加
+  const buyLog = createLogEntry("buy_development_card", player);
+  newState = addLog(newState, buyLog);
 
   // 勝利点カードの場合、勝利条件をチェック
   if (drawnCard === "victoryPoint") {
@@ -1823,32 +2041,31 @@ export function handleUseDevelopmentCard(
         players: updatedPlayers,
         phase: "robber_move" as GamePhase,
       };
+      // 騎士カード使用ログを追加
+      const knightLog = createLogEntry("use_knight", player);
+      updatedState = addLog(updatedState, knightLog);
       // 最大騎士力を更新
       updatedState = updateLargestArmy(updatedState);
       break;
     }
 
     case "roadBuilding": {
-      // 街道建設: 2本の道を無料で建設（後でUIで処理）
+      // 街道建設: 2本の道を無料で建設
       updatedPlayers = state.players.map((p) => {
         if (p.id !== playerId) return p;
         const newCards = [...p.developmentCards];
         newCards.splice(cardIndex, 1);
         return { ...p, developmentCards: newCards };
       });
-      // 実際の道建設は別途処理（簡易実装: 道2本分の資源を付与）
-      updatedPlayers = updatedPlayers.map((p) => {
-        if (p.id !== playerId) return p;
-        return {
-          ...p,
-          resources: {
-            ...p.resources,
-            wood: p.resources.wood + 2,
-            brick: p.resources.brick + 2,
-          },
-        };
-      });
-      updatedState = { ...state, players: updatedPlayers };
+      // 道建設フェーズに移行（資源消費なしで2本の道を建設）
+      updatedState = {
+        ...state,
+        players: updatedPlayers,
+        phase: "road_building_1" as GamePhase,
+      };
+      // 街道建設カード使用ログを追加
+      const roadBuildingLog = createLogEntry("use_road_building", player);
+      updatedState = addLog(updatedState, roadBuildingLog);
       break;
     }
 
@@ -1867,6 +2084,14 @@ export function handleUseDevelopmentCard(
         return { ...p, developmentCards: newCards, resources: newResources };
       });
       updatedState = { ...state, players: updatedPlayers };
+      // 収穫カード使用ログを追加（獲得した資源も記録）
+      const yopLog = createLogEntry("use_year_of_plenty", player, {
+        resources: {
+          [params.resources[0]]: 1,
+          [params.resources[1]]: 1,
+        },
+      });
+      updatedState = addLog(updatedState, yopLog);
       break;
     }
 
@@ -1904,6 +2129,12 @@ export function handleUseDevelopmentCard(
         };
       });
       updatedState = { ...state, players: updatedPlayers };
+      // 独占カード使用ログを追加（独占した資源と枚数を記録）
+      const monopolyLog = createLogEntry("use_monopoly", player, {
+        resource: targetResource,
+        amount: totalStolen,
+      });
+      updatedState = addLog(updatedState, monopolyLog);
       break;
     }
   }
@@ -2019,11 +2250,18 @@ function updateLongestRoad(state: GameState): GameState {
       return p;
     });
 
-    return {
+    // 最長交易路獲得ログを追加
+    const newHolder = updatedPlayers.find((p) => p.id === longestRoadPlayerId);
+    let newState: GameState = {
       ...state,
       players: updatedPlayers,
       longestRoadPlayerId,
     };
+    if (newHolder) {
+      const longestRoadLog = createLogEntry("longest_road", newHolder);
+      newState = addLog(newState, longestRoadLog);
+    }
+    return newState;
   }
 
   return state;
@@ -2066,11 +2304,18 @@ function updateLargestArmy(state: GameState): GameState {
       return p;
     });
 
-    return {
+    // 最大騎士力獲得ログを追加
+    const newHolder = updatedPlayers.find((p) => p.id === largestArmyPlayerId);
+    let newState: GameState = {
       ...state,
       players: updatedPlayers,
       largestArmyPlayerId,
     };
+    if (newHolder) {
+      const largestArmyLog = createLogEntry("largest_army", newHolder);
+      newState = addLog(newState, largestArmyLog);
+    }
+    return newState;
   }
 
   return state;
@@ -2225,8 +2470,17 @@ export function handleRespondToTrade(
       return p;
     });
 
+    // プレイヤー間交易成立ログを追加
+    const tradeLog = createLogEntry("player_trade", proposer, {
+      offering: tradeOffer.offering,
+      requesting: tradeOffer.requesting,
+      tradePartnerId: playerId,
+      tradePartnerName: responder.name,
+    });
+    let newState = addLog(state, tradeLog);
+
     return {
-      ...state,
+      ...newState,
       players: updatedPlayers,
       activeTradeOffer: null,
       phase: "main",
@@ -2271,8 +2525,14 @@ function checkVictoryCondition(state: GameState): GameState {
     const totalVP = player.visibleVictoryPoints + vpFromCards;
 
     if (totalVP >= 10) {
+      // ゲーム終了ログを追加
+      const gameEndLog = createLogEntry("game_end", player, {
+        winnerId: player.id,
+        winnerName: player.name,
+      });
+      let newState = addLog(state, gameEndLog);
       return {
-        ...state,
+        ...newState,
         phase: "game_over",
         winnerId: player.id,
       };

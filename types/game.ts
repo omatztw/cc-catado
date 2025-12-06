@@ -175,6 +175,8 @@ export interface Player {
   };
   // 接続状態
   isConnected: boolean;
+  // AIプレイヤーかどうか
+  isAI?: boolean;
 }
 
 /**
@@ -205,6 +207,8 @@ export type GamePhase =
   | "robber_steal" // 盗賊による資源略奪
   | "discard" // 資源破棄（7が出た時、8枚以上持っている場合）
   | "trade_offer" // 交易提案中
+  | "road_building_1" // 街道建設カード：1本目の道を建設
+  | "road_building_2" // 街道建設カード：2本目の道を建設
   | "game_over"; // ゲーム終了
 
 /**
@@ -272,10 +276,14 @@ export interface GameState {
   largestArmyPlayerId: string | null;
   // 勝者（ゲーム終了時のみ）
   winnerId: string | null;
+  // ゲームログ
+  logs: GameLogEntry[];
   // 作成日時
   createdAt: string;
   // 最終更新日時
   updatedAt: string;
+  // テスト用シナリオデータ（オプション、本番では undefined）
+  testScenario?: TestScenario;
 }
 
 // ============================================
@@ -320,6 +328,10 @@ export interface ClientToServerEvents {
   chat_message: (data: { roomId: string; message: string }) => void;
   // ゲームリセット（ホストのみ）
   reset_game: (data: { roomId: string }) => void;
+  // CPUプレイヤー追加（ホストのみ）
+  add_cpu_player: (data: { roomId: string }) => void;
+  // CPUプレイヤー削除（ホストのみ）
+  remove_cpu_player: (data: { roomId: string; playerId: string }) => void;
 }
 
 /**
@@ -395,6 +407,25 @@ export interface ServerToClientEvents {
   game_reset: (data: { gameState: GameState }) => void;
   // エラー通知
   error: (data: { message: string; code: string }) => void;
+  // CPUプレイヤー追加結果
+  cpu_player_added: (data: {
+    success: boolean;
+    player?: Player;
+    error?: string;
+  }) => void;
+  // CPUプレイヤー削除結果
+  cpu_player_removed: (data: {
+    success: boolean;
+    playerId?: string;
+    error?: string;
+  }) => void;
+  // AIの思考（つぶやき）表示
+  ai_thinking: (data: {
+    playerId: string;
+    playerName: string;
+    thinking: string;
+    timestamp: string;
+  }) => void;
 }
 
 // ============================================
@@ -557,3 +588,167 @@ export const INITIAL_PIECES = {
  * 勝利に必要な勝利点
  */
 export const VICTORY_POINTS_TO_WIN = 10;
+
+// ============================================
+// ゲームログ
+// ============================================
+
+/**
+ * ゲームログエントリの種類
+ */
+export type GameLogType =
+  | "game_start" // ゲーム開始
+  | "turn_start" // ターン開始
+  | "dice_roll" // サイコロの出目
+  | "resource_gain" // 資源獲得
+  | "build_settlement" // 開拓地建設
+  | "build_city" // 都市建設
+  | "build_road" // 道路建設
+  | "buy_development_card" // 発展カード購入
+  | "use_knight" // 騎士カード使用
+  | "use_road_building" // 街道建設カード使用
+  | "use_year_of_plenty" // 収穫カード使用
+  | "use_monopoly" // 独占カード使用
+  | "move_robber" // 盗賊移動
+  | "steal_resource" // 資源略奪
+  | "discard_resources" // 資源破棄
+  | "trade_with_bank" // 銀行交易
+  | "player_trade" // プレイヤー間交易
+  | "longest_road" // 最長交易路獲得
+  | "largest_army" // 最大騎士力獲得
+  | "game_end"; // ゲーム終了
+
+/**
+ * ゲームログエントリ
+ */
+export interface GameLogEntry {
+  id: string;
+  type: GameLogType;
+  playerId: string;
+  playerName: string;
+  playerColor: PlayerColor;
+  timestamp: string;
+  // ログ固有のデータ
+  data?: {
+    // サイコロの出目
+    die1?: number;
+    die2?: number;
+    total?: number;
+    // 建設関連
+    buildingType?: BuildingType | "road";
+    // 資源関連
+    resource?: HoldableResource;
+    resources?: Partial<PlayerResources>;
+    amount?: number;
+    // 発展カード関連
+    cardType?: DevelopmentCardType;
+    // 盗賊・略奪関連
+    targetPlayerId?: string;
+    targetPlayerName?: string;
+    stolenResource?: HoldableResource;
+    // 交易関連
+    give?: { resource: HoldableResource; amount: number };
+    receive?: HoldableResource;
+    offering?: Partial<PlayerResources>;
+    requesting?: Partial<PlayerResources>;
+    tradePartnerId?: string;
+    tradePartnerName?: string;
+    // 勝利関連
+    winnerId?: string;
+    winnerName?: string;
+  };
+}
+
+// ============================================
+// テストシナリオ
+// ============================================
+
+/**
+ * テスト用シナリオデータ
+ * ランダム要素を確定的にするためのデータ構造
+ */
+export interface TestScenario {
+  /**
+   * サイコロの出目キュー
+   * 順番に消費され、空になったら通常のランダム処理にフォールバック
+   */
+  diceRolls?: Array<{ die1: number; die2: number }>;
+
+  /**
+   * 発展カードの順序
+   * シャッフルせずこの順番でデッキを構成
+   */
+  developmentCardOrder?: DevelopmentCardType[];
+
+  /**
+   * ボード配置
+   * タイルの地形と数字トークンの固定配置
+   */
+  boardSetup?: {
+    /** 地形タイプの配列（19個、砂漠含む） */
+    terrains: ResourceType[];
+    /** 数字トークンの配列（砂漠はnull） */
+    numberTokens: (number | null)[];
+  };
+
+  /**
+   * ターン順
+   * シャッフルせずこの順番でターンを進行
+   * プレイヤーIDの配列
+   */
+  turnOrder?: string[];
+
+  /**
+   * 略奪時の資源選択インデックス
+   * 盗賊で資源を奪う際、利用可能な資源配列から選択するインデックス
+   * 順番に消費され、空になったら通常のランダム処理にフォールバック
+   */
+  stealIndices?: number[];
+}
+
+// ============================================
+// AI設定
+// ============================================
+
+/**
+ * AIプロバイダーの種類
+ */
+export type AIProvider = "gemini" | "deepseek" | "openrouter";
+
+/**
+ * AI設定
+ */
+export interface AIConfig {
+  provider: AIProvider;
+  apiKey: string;
+  // モデル名（オプション、デフォルトは各プロバイダーの推奨モデル）
+  model?: string;
+  // 思考時間（ミリ秒）- 人間らしさのための遅延
+  thinkingDelay?: number;
+}
+
+/**
+ * AIのアクション決定リクエスト
+ */
+export interface AIDecisionRequest {
+  gameState: GameState;
+  playerId: string;
+  availableActions: AvailableAction[];
+}
+
+/**
+ * 実行可能なアクション情報
+ */
+export interface AvailableAction {
+  type: GameActionType;
+  description: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * AIのアクション決定レスポンス
+ */
+export interface AIDecisionResponse {
+  action: GameAction;
+  reasoning?: string;
+}

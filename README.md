@@ -136,6 +136,57 @@ Socket.io サーバーのヘルスチェック:
 curl http://localhost:3001/health
 ```
 
+## MCP サーバー（AI対戦用）
+
+MCPサーバーを使用すると、Claude等のAIがカタンをプレイできます。リモートゲームサーバーに接続して人間プレイヤーと対戦します。
+
+### セットアップ
+
+Claude Desktop の設定ファイル（`claude_desktop_config.json`）に以下を追加:
+
+```json
+{
+  "mcpServers": {
+    "catan": {
+      "command": "npm",
+      "args": ["run", "mcp"],
+      "cwd": "/path/to/cc-catado"
+    }
+  }
+}
+```
+
+### 利用可能なツール
+
+| ツール | 説明 |
+|--------|------|
+| `remote_connect` | リモートサーバーに接続 |
+| `remote_disconnect` | サーバーから切断 |
+| `remote_login` | サーバーにログイン |
+| `remote_list_rooms` | 公開ルーム一覧を取得 |
+| `remote_create_room` | 新しいルームを作成 |
+| `remote_join_room` | 既存のルームに参加 |
+| `remote_get_state` | ゲーム状態を取得 |
+| `remote_get_actions` | 実行可能なアクションを取得 |
+| `remote_action` | アクションを実行 |
+| `remote_wait_for_turn` | 自分のターンまで待機 |
+| `remote_chat` | チャットを送信 |
+
+### 利用可能なリソース
+
+- `catan://rules` - カタンの完全なルール
+- `catan://strategy` - 戦略ガイド
+
+### 使い方例
+
+```
+リモートサーバー http://example.com:3001 に接続して、
+「AI対戦部屋」というルームを作成してください。
+人間プレイヤーが参加したらゲームを開始します。
+```
+
+AIがルームを作成し、人間プレイヤーとルールに従ってプレイします。
+
 ## ライセンス
 
 MIT

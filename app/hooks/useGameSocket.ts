@@ -39,6 +39,14 @@ export interface SessionInfo {
   timestamp: number;
 }
 
+/** AIの思考（つぶやき）データ */
+export interface AIThinking {
+  playerId: string;
+  playerName: string;
+  thinking: string;
+  timestamp: string;
+}
+
 export interface UseGameSocketReturn {
   /** ソケットの接続状態 */
   isConnected: boolean;
@@ -60,6 +68,8 @@ export interface UseGameSocketReturn {
   error: string | null;
   /** チャットメッセージ一覧 */
   chatMessages: ChatMessage[];
+  /** AIの思考（つぶやき）一覧 */
+  aiThinkings: AIThinking[];
   /** 公開ルーム一覧 */
   publicRooms: RoomInfo[];
   /** 保存されたセッション情報（後方互換性） */
@@ -96,6 +106,10 @@ export interface UseGameSocketReturn {
   reconnect: () => void;
   /** 保存されたセッションをクリア */
   clearSavedSession: () => void;
+  /** CPUプレイヤーを追加（ホストのみ） */
+  addCpuPlayer: () => void;
+  /** CPUプレイヤーを削除（ホストのみ） */
+  removeCpuPlayer: (cpuPlayerId: string) => void;
 }
 
 // ============================================
@@ -167,6 +181,7 @@ export function useGameSocket(
   const [isSpectator, setIsSpectator] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [aiThinkings, setAiThinkings] = useState<AIThinking[]>([]);
   const [publicRooms, setPublicRooms] = useState<RoomInfo[]>([]);
   const [savedSession, setSavedSession] = useState<SessionInfo | null>(null);
 
@@ -409,6 +424,27 @@ export function useGameSocket(
       setError(data.message);
     });
 
+    socket.on("cpu_player_added", (data) => {
+      console.log("[useGameSocket] CPU player added:", data);
+      if (!data.success) {
+        setError(data.error || "CPUプレイヤーの追加に失敗しました");
+        setTimeout(() => setError(null), 3000);
+      }
+    });
+
+    socket.on("cpu_player_removed", (data) => {
+      console.log("[useGameSocket] CPU player removed:", data);
+      if (!data.success) {
+        setError(data.error || "CPUプレイヤーの削除に失敗しました");
+        setTimeout(() => setError(null), 3000);
+      }
+    });
+
+    socket.on("ai_thinking", (data) => {
+      console.log("[useGameSocket] AI thinking:", data.thinking);
+      setAiThinkings((prev) => [...prev, data]);
+    });
+
     socketRef.current = socket;
     return socket;
   }, [serverUrl]);
@@ -446,6 +482,7 @@ export function useGameSocket(
     setGameState(null);
     setIsSpectator(false);
     setChatMessages([]);
+    setAiThinkings([]);
     roomIdRef.current = null;
     playerNameRef.current = null;
     clearSession();
@@ -526,6 +563,7 @@ export function useGameSocket(
     // playerId は維持（ログインセッション継続）
     setIsSpectator(false);
     setChatMessages([]);
+    setAiThinkings([]);
     roomIdRef.current = null;
     // セッション情報をクリア（後方互換性のため）
     clearSession();
@@ -626,6 +664,33 @@ export function useGameSocket(
   }, []);
 
   /**
+   * CPUプレイヤーを追加（ホストのみ）
+   */
+  const addCpuPlayer = useCallback(() => {
+    if (!socketRef.current || !roomIdRef.current) {
+      setError("サーバーに接続されていません");
+      return;
+    }
+
+    socketRef.current.emit("add_cpu_player", { roomId: roomIdRef.current });
+  }, []);
+
+  /**
+   * CPUプレイヤーを削除（ホストのみ）
+   */
+  const removeCpuPlayer = useCallback((cpuPlayerId: string) => {
+    if (!socketRef.current || !roomIdRef.current) {
+      setError("サーバーに接続されていません");
+      return;
+    }
+
+    socketRef.current.emit("remove_cpu_player", {
+      roomId: roomIdRef.current,
+      playerId: cpuPlayerId,
+    });
+  }, []);
+
+  /**
    * 接続を再試行
    */
   const reconnect = useCallback(() => {
@@ -672,6 +737,7 @@ export function useGameSocket(
     isSpectator,
     error,
     chatMessages,
+    aiThinkings,
     publicRooms,
     savedSession,
     login,
@@ -688,6 +754,8 @@ export function useGameSocket(
     resetGame,
     reconnect,
     clearSavedSession,
+    addCpuPlayer,
+    removeCpuPlayer,
   };
 }
 
